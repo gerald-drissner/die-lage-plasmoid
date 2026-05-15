@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="addon">
+  <id>com.drissner.dielage</id>
+  <extends>org.kde.plasmashell</extends>
+  <name>Die Lage</name>
+  <name xml:lang="en">Die Lage (Daily Briefing)</name>
+  <summary>Kompaktes Lagebild aus Nachrichten, Wetter, Warnmeldungen und Märkten</summary>
+  <summary xml:lang="en">Compact current-affairs board with news, weather, warnings and markets</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="com.drissner">
+    <name>Gerald Drißner</name>
+  </developer>
+  <update_contact>mail@drissner.media</update_contact>
+  <description>
+    <p>
+      Der Name „Die Lage“ ist bewusst journalistisch gemeint: Er steht für
+      den aktuellen Stand der Dinge, also für die Frage, was gerade wichtig
+      ist und im Blick bleiben sollte. In der englischen Oberfläche heißt
+      das Widget „Daily Briefing“.
+    </p>
+    <p>
+      Die Lage zeigt auf einen Blick, was gerade los ist: RSS-Nachrichten aus
+      deutsch- und englischsprachigen Quellen, das aktuelle Wetter für
+      mehrere Orte, amtliche Warnmeldungen (NINA, MeteoAlarm, GeoSphere
+      Österreich, US National Weather Service oder eigene Atom-/RSS-Feeds),
+      islamische Gebetszeiten, optional Wechselkurse, Indizes, Aktien sowie
+      kompakte Linux-Systeminformationen.
+    </p>
+    <p>
+      Das Widget entstand als persönlicher Ersatz für ein Conky-Dashboard,
+      weil Conky in Wayland-/NVIDIA-Setups immer wieder Probleme machen kann.
+      Es funktioniert besonders gut auf einem hochformatigen zweiten oder
+      dritten Monitor und wirkt am stärksten auf einem schwarzen Desktop-
+      Hintergrund.
+    </p>
+    <p>
+      Das Widget funktioniert auf dem Desktop und im Panel. Im Panel wird
+      ein kleines Symbol mit Tooltip oder ein Warnstatus angezeigt, ein
+      Klick öffnet die volle Ansicht als Popup. Die Reihenfolge der Blöcke
+      lässt sich in den Einstellungen anpassen, ein eigener Titel und ein
+      wählbares Panel-Symbol sind ebenfalls möglich.
+    </p>
+    <p xml:lang="en">
+      Die Lage means roughly “the situation” or “the current state of
+      affairs”. In German journalism, the phrase points to the daily
+      editorial question: what is happening, what matters right now, and
+      what needs to be kept in view. The English name used inside the widget
+      is Daily Briefing.
+    </p>
+    <p xml:lang="en">
+      Daily Briefing shows what's happening at a glance: RSS news from
+      German- and English-language sources, current weather for multiple
+      locations, official warnings (NINA, MeteoAlarm, GeoSphere Austria, US
+      National Weather Service, or custom Atom/RSS feeds), Islamic prayer
+      times, optional exchange rates, indices, stocks, and a compact Linux
+      system info block.
+    </p>
+    <p xml:lang="en">
+      It was created as a personal replacement for a Conky dashboard because
+      Conky can be troublesome in Wayland/NVIDIA setups. It works especially
+      well on a portrait-oriented second or third monitor and looks strongest
+      on a black desktop background.
+    </p>
+    <p xml:lang="en">
+      Works on the desktop and in the panel. In a panel it shows a small
+      icon with tooltip or a warning status; a click opens the full popup.
+      Block order is configurable; a custom widget title and selectable panel
+      icon are supported.
+    </p>
+  </description>
+  <url type="homepage">https://drissner.media</url>
+  <url type="bugtracker">https://drissner.media/kontakt</url>
+  <url type="contact">https://drissner.media/kontakt</url>
+  <url type="donation">https://www.paypal.me/drissner</url>
+  <categories>
+    <category>Utility</category>
+    <category>News</category>
+  </categories>
+  <keywords>
+    <keyword>news</keyword>
+    <keyword>rss</keyword>
+    <keyword>weather</keyword>
+    <keyword>warnings</keyword>
+    <keyword>nina</keyword>
+    <keyword>meteoalarm</keyword>
+    <keyword>prayer times</keyword>
+    <keyword>markets</keyword>
+    <keyword>briefing</keyword>
+    <keyword xml:lang="de">Nachrichten</keyword>
+    <keyword xml:lang="de">Wetter</keyword>
+    <keyword xml:lang="de">Warnmeldungen</keyword>
+    <keyword xml:lang="de">Lagebild</keyword>
+  </keywords>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source" width="1364" height="2048">https://drissner.media/die-lage/screenshots/die-lage-portrait-dashboard.png</image>
+      <caption>Vertical dashboard layout on a dark desktop background</caption>
+      <caption xml:lang="de">Vertikales Dashboard auf schwarzem Desktop-Hintergrund</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1218" height="1021">https://drissner.media/die-lage/screenshots/die-lage-panel-popup.png</image>
+      <caption>Panel popup view with weather, warnings, prayer times, markets and news</caption>
+      <caption xml:lang="de">Panel-Popup mit Wetter, Warnmeldungen, Gebetszeiten, Märkten und Nachrichten</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.60.5" date="2026-05-15">
+      <description>
+        <p>Final publishing polish: hardens plain-text rendering for feed/index names and improves panel popup width state tracking for narrow popup layouts.</p>
+        <p xml:lang="de">Letzter Feinschliff für die Veröffentlichung: Feed- und Indexnamen werden als PlainText gerendert und die Panel-Popup-Breite wird robuster verfolgt.</p>
+      </description>
+    </release>
+    <release version="1.60.2" date="2026-05-15">
+      <description>
+        <p>Makes market timestamps context-aware: same-day local values stay compact, while stale or foreign-market values keep the useful date/timezone context.</p>
+        <p xml:lang="de">Macht Markt-Zeitangaben kontextabhängig: Werte vom heutigen lokalen Tag bleiben kompakt, während ältere oder ausländische Börsendaten Datum und Zeitzone behalten.</p>
+      </description>
+    </release>
+    <release version="1.58.5" date="2026-05-15">
+      <description>
+        <p>Highlights upcoming prayer times, reorders weather details, and adds several small robustness fixes for configuration handling and installation.</p>
+        <p xml:lang="de">Markiert bevorstehende Gebetszeiten, sortiert Wetterdetails neu und ergänzt mehrere kleine Robustheitsfixes für Konfiguration und Installation.</p>
+      </description>
+    </release>
+    <release version="1.57.0" date="2026-05-13">
+      <description>
+        <p>Feinschliff bei Abständen, sichtbares Feedback für die Dienststatus-Prüfung, optionale VPN-Erkennung im Systemstatus mit manuellem VPN-Kürzel und normale Schriftstärke für arabische Begriffe in den Gebetszeiten.</p>
+        <p xml:lang="en">Fine-tunes spacing, adds visible feedback for the service status check, adds optional VPN detection in system status with a manual VPN label, and renders Arabic prayer-time terms in normal weight.</p>
+      </description>
+    </release>
+    <release version="1.52.2" date="2026-05-13">
+      <description>
+        <p>Härtet die lokalen HTTP-POST-Endpunkte gegen CSRF-artige Aufrufe weiter ab, entfernt Origin:null aus der CORS-Allowlist und räumt temporäre Cache-Dateien auch bei Schreibfehlern auf.</p>
+        <p xml:lang="en">Further hardens local HTTP POST endpoints against CSRF-like calls, removes Origin:null from the CORS allowlist and cleans temporary cache files on write failures.</p>
+      </description>
+    </release>
+    <release version="1.52.1" date="2026-05-13">
+      <description>
+        <p>Kleine Stabilitätsfixes: Konfigurationsaktualisierung im Installer schreibt jetzt atomar; aufgeräumte tmp-Dateien bei Schreibfehlern; Widget zeigt nicht mehr versehentlich alte Daten an, wenn ein Refresh bereits läuft.</p>
+        <p xml:lang="en">Small stability fixes: installer config update now writes atomically; tmp files are cleaned up on write errors; widget no longer re-displays stale data when a refresh is already in flight.</p>
+      </description>
+    </release>
+    <release version="1.52.0" date="2026-05-13">
+      <description>
+        <p>Lokaler Hintergrunddienst weist fremde Browser-Origins ab; config.json wird atomar geschrieben; parallele Refresh-Anfragen werden zusammengefasst; leere Wetterorte und Warngebiete bleiben leer; UI-Sprache flackert beim Start nicht mehr.</p>
+        <p xml:lang="en">Local helper service rejects foreign browser origins; config.json is written atomically; concurrent refreshes are coalesced; empty weather and warning lists stay empty; UI language no longer flashes on startup.</p>
+      </description>
+    </release>
+    <release version="1.51.0" date="2026-05-13">
+      <description>
+        <p>Umbenennung zu "Die Lage" / "Daily Briefing"; Block-Reihenfolge anpassbar; eigener Widget-Titel; Reset auf Standardwerte; Erkennung des Hintergrunddienstes; Unterstützung für dnf und zypper; Sicherheits- und Crossdistro-Verbesserungen.</p>
+        <p xml:lang="en">Renamed to "Die Lage" / "Daily Briefing"; configurable block order; custom widget title; reset-to-defaults; helper service detection; dnf and zypper support; security and cross-distro improvements.</p>
+      </description>
+    </release>
+  </releases>
+</component>

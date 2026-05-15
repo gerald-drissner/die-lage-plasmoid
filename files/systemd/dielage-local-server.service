@@ -1,0 +1,13 @@
+[Unit]
+Description=Local server for Die Lage
+After=default.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/dielage-server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

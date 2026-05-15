@@ -1,0 +1,198 @@
+{
+  "feeds": [
+    {
+      "limit": 5,
+      "name": "Tagesschau",
+      "url": "https://www.tagesschau.de/xml/rss2/"
+    },
+    {
+      "limit": 5,
+      "name": "NTV",
+      "url": "https://www.n-tv.de/rss"
+    },
+    {
+      "limit": 4,
+      "name": "BBC World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+    },
+    {
+      "limit": 3,
+      "name": "Al Jazeera",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml"
+    },
+    {
+      "limit": 3,
+      "name": "The New Arab",
+      "url": "https://www.newarab.com/rss"
+    },
+    {
+      "limit": 4,
+      "name": "Haaretz ME",
+      "url": "https://www.haaretz.com/srv/middle-east-news-rss"
+    },
+    {
+      "limit": 4,
+      "name": "ORF",
+      "url": "https://rss.orf.at/news.xml"
+    },
+    {
+      "limit": 3,
+      "name": "Der Standard",
+      "url": "https://www.derstandard.at/rss/inland"
+    },
+    {
+      "limit": 3,
+      "name": "RBB24",
+      "url": "https://www.rbb24.de/aktuell/index.xml/feed=rss.xml"
+    },
+    {
+      "limit": 3,
+      "name": "Polizei Berlin",
+      "url": "https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml"
+    },
+    {
+      "limit": 3,
+      "name": "Heise online",
+      "url": "https://www.heise.de/newsticker/heise.rdf"
+    }
+  ],
+  "weather_locations": [
+    {
+      "name": "Hennigsdorf",
+      "lat": 52.6391,
+      "lon": 13.209
+    },
+    {
+      "name": "Berlin",
+      "lat": 52.5155,
+      "lon": 13.4546
+    },
+    {
+      "name": "Bludenz",
+      "lat": 47.1527,
+      "lon": 9.8276
+    },
+    {
+      "name": "El Paso",
+      "lat": 31.7619,
+      "lon": -106.485
+    },
+    {
+      "name": "Nashville",
+      "lat": 36.1744,
+      "lon": -86.76796
+    },
+    {
+      "name": "Alexandria",
+      "lat": 31.2156,
+      "lon": 29.9553
+    }
+  ],
+  "nina_codes": [
+    {
+      "name": "Berlin",
+      "code": "110000000000",
+      "source": "nina"
+    },
+    {
+      "name": "Hennigsdorf",
+      "code": "120650136136",
+      "source": "nina"
+    },
+    {
+      "name": "Oberhavel",
+      "code": "120650000000",
+      "source": "nina"
+    }
+  ],
+  "prayer": {
+    "city": "Berlin",
+    "country": "Germany",
+    "method": 3
+  },
+  "markets": {
+    "currencies": [
+      "USD",
+      "GBP",
+      "CHF"
+    ],
+    "indices": [
+      {
+        "name": "Dow Jones",
+        "symbol": "^DJI"
+      },
+      {
+        "name": "DAX",
+        "symbol": "^GDAXI"
+      },
+      {
+        "name": "Nikkei 225",
+        "symbol": "^N225"
+      }
+    ],
+    "twelve_data_api_key": "",
+    "finnhub_api_key": "",
+    "provider_mode": "auto",
+    "stocks": [],
+    "show_currencies": true,
+    "show_indices": true,
+    "show_stocks": true
+  },
+  "fetch_interval_minutes": 10,
+  "ui": {
+    "font_size": 18,
+    "highlight_color": "",
+    "news_font_family": "",
+    "news_font_size_offset": 1,
+    "news_font_size": 19,
+    "language": "de",
+    "panel_mode": "icon",
+    "desktop_background_mode": "default",
+    "desktop_background_color": "",
+    "custom_title": "",
+    "separator_style": "subtle",
+    "news_links_clickable": true,
+    "title_style": "accent",
+    "panel_icon_mode": "dielage",
+    "panel_theme_icon": "view-list-details",
+    "panel_warning_badge": true,
+    "panel_no_warnings_mode": "icon",
+    "block_heading_icons": true,
+    "panel_width": 24,
+    "panel_middle_click_refresh": true,
+    "prayer_upcoming_highlight": true,
+    "panel_popup_width": 600
+  },
+  "blocks": {
+    "weather": true,
+    "prayer": true,
+    "nina": true,
+    "news": true,
+    "markets": true,
+    "system": true
+  },
+  "block_order": [
+    "nina",
+    "weather",
+    "prayer",
+    "markets",
+    "news",
+    "system"
+  ],
+  "system": {
+    "show_info": true,
+    "show_network": true,
+    "show_public_network": false,
+    "show_updates": true,
+    "show_vpn": true,
+    "vpn_label": ""
+  },
+  "collapsed_blocks": {
+    "nina": false,
+    "weather": false,
+    "prayer": false,
+    "markets": false,
+    "news": false,
+    "system": false
+  }
+}

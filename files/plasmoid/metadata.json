@@ -1,0 +1,25 @@
+{
+  "KPlugin": {
+    "Authors": [
+      {
+        "Name": "Gerald Drißner",
+        "Email": "mail@drissner.media"
+      }
+    ],
+    "Category": "Utilities",
+    "Description": "Die Lage – kompaktes Lagebild für Plasma: RSS-Nachrichten, Wetter, Warnmeldungen, islamische Gebetszeiten, Märkte und Systemstatus.",
+    "Description[en]": "Die Lage (Daily Briefing) – a compact current-affairs board for Plasma: RSS news, weather, warnings, Islamic prayer times, markets and system status.",
+    "EnabledByDefault": true,
+    "Icon": "/icons/dielage.svg",
+    "Id": "com.drissner.dielage",
+    "License": "MIT",
+    "Name": "Die Lage",
+    "Name[en]": "Die Lage (Daily Briefing)",
+    "Version": "1.60.5",
+    "Website": "https://drissner.media",
+    "Copyright": "© 2026 Gerald Drißner"
+  },
+  "X-Plasma-API-Minimum-Version": "6.0",
+  "KPackageStructure": "Plasma/Applet",
+  "Version": "1.60.5"
+}

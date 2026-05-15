@@ -1,0 +1,10 @@
+[Unit]
+Description=Run initial Die Lage cache refresh after login/reboot
+
+[Timer]
+OnStartupSec=45s
+AccuracySec=15s
+Unit=dielage-cache-boot.service
+
+[Install]
+WantedBy=timers.target

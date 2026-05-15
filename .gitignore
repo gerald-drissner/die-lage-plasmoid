@@ -1,0 +1,38 @@
+# Die Lage / Daily Briefing
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Build / release artifacts
+dist/
+build/
+release/
+*.plasmoid
+*.zip
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.kate-swp
+*.swp
+*.swo
+
+# Local runtime data - never commit
+config.json
+rss.json
+*.tmp
+*.log
+
+# Local secrets - never commit
+*.env
+.env
+secrets.*

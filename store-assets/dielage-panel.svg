@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Die Lage">
+  <defs>
+    <linearGradient id="a" x1="0" y1="2" x2="0" y2="22">
+      <stop offset="0" stop-color="#ffc46b"/>
+      <stop offset="1" stop-color="#ff9f2e"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#a)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 3.5v17" stroke-width="2.4"/>
+    <path d="M8 6h10" stroke-width="2.2"/>
+    <path d="M8 12h8" stroke-width="2.2" opacity="0.82"/>
+    <path d="M8 18h6" stroke-width="2.2" opacity="0.64"/>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Update Die Lage cache
+After=network-online.target
+Wants=network-online.target
+# Note: no [Install] section — this service is triggered by dielage-cache.timer,
+# not enabled directly.  "systemctl --user enable dielage-cache.service" is a
+# no-op; enable the .timer instead.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/dielage-cache.py

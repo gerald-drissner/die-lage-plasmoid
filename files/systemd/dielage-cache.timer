@@ -1,0 +1,13 @@
+[Unit]
+Description=Check Die Lage cache interval
+
+[Timer]
+# Fire every minute so a user setting of fetch_interval_minutes=1 is actually
+# honored.  The cache script exits immediately when the cache is still fresh,
+# so the overhead is only a tiny Python/config-read check between real fetches.
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=dielage-cache.service
+
+[Install]
+WantedBy=timers.target

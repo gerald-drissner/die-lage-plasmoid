@@ -1,0 +1,11 @@
+[Unit]
+Description=Initial Die Lage cache refresh after login/reboot
+After=network-online.target dielage-local-server.service
+Wants=network-online.target
+# Note: no [Install] section — triggered by dielage-cache-boot.timer.
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/.local/bin/dielage-cache.py --force
