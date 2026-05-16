@@ -93,6 +93,12 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.60.7" date="2026-05-16">
+      <description>
+        <p>Hardens the helper and cache scripts: clearer JSON errors, default-config consistency, header-based market API authentication, optional safer XML parsing, dnf cache-only update checks and more targeted Plasma cache cleanup.</p>
+        <p xml:lang="de">Härtet Helper und Cache-Skript: klarere JSON-Fehler, konsistentere Standardkonfiguration, API-Key-Übertragung per Header, optional sichereres XML-Parsing, dnf-Prüfung nur aus dem Cache und gezieltere Plasma-Cache-Bereinigung.</p>
+      </description>
+    </release>
     <release version="1.60.6" date="2026-05-16">
       <description>
         <p>Improves the first-run setup screen with a direct GitHub installer ZIP download button, GitHub project link, and clearer copyable helper installation commands.</p>
@@ -113,38 +119,8 @@
     </release>
     <release version="1.58.5" date="2026-05-15">
       <description>
-        <p>Highlights upcoming prayer times, reorders weather details, and adds several small robustness fixes for configuration handling and installation.</p>
-        <p xml:lang="de">Markiert bevorstehende Gebetszeiten, sortiert Wetterdetails neu und ergänzt mehrere kleine Robustheitsfixes für Konfiguration und Installation.</p>
-      </description>
-    </release>
-    <release version="1.57.0" date="2026-05-13">
-      <description>
-        <p>Feinschliff bei Abständen, sichtbares Feedback für die Dienststatus-Prüfung, optionale VPN-Erkennung im Systemstatus mit manuellem VPN-Kürzel und normale Schriftstärke für arabische Begriffe in den Gebetszeiten.</p>
-        <p xml:lang="en">Fine-tunes spacing, adds visible feedback for the service status check, adds optional VPN detection in system status with a manual VPN label, and renders Arabic prayer-time terms in normal weight.</p>
-      </description>
-    </release>
-    <release version="1.52.2" date="2026-05-13">
-      <description>
-        <p>Härtet die lokalen HTTP-POST-Endpunkte gegen CSRF-artige Aufrufe weiter ab, entfernt Origin:null aus der CORS-Allowlist und räumt temporäre Cache-Dateien auch bei Schreibfehlern auf.</p>
-        <p xml:lang="en">Further hardens local HTTP POST endpoints against CSRF-like calls, removes Origin:null from the CORS allowlist and cleans temporary cache files on write failures.</p>
-      </description>
-    </release>
-    <release version="1.52.1" date="2026-05-13">
-      <description>
-        <p>Kleine Stabilitätsfixes: Konfigurationsaktualisierung im Installer schreibt jetzt atomar; aufgeräumte tmp-Dateien bei Schreibfehlern; Widget zeigt nicht mehr versehentlich alte Daten an, wenn ein Refresh bereits läuft.</p>
-        <p xml:lang="en">Small stability fixes: installer config update now writes atomically; tmp files are cleaned up on write errors; widget no longer re-displays stale data when a refresh is already in flight.</p>
-      </description>
-    </release>
-    <release version="1.52.0" date="2026-05-13">
-      <description>
-        <p>Lokaler Hintergrunddienst weist fremde Browser-Origins ab; config.json wird atomar geschrieben; parallele Refresh-Anfragen werden zusammengefasst; leere Wetterorte und Warngebiete bleiben leer; UI-Sprache flackert beim Start nicht mehr.</p>
-        <p xml:lang="en">Local helper service rejects foreign browser origins; config.json is written atomically; concurrent refreshes are coalesced; empty weather and warning lists stay empty; UI language no longer flashes on startup.</p>
-      </description>
-    </release>
-    <release version="1.51.0" date="2026-05-13">
-      <description>
-        <p>Umbenennung zu "Die Lage" / "Daily Briefing"; Block-Reihenfolge anpassbar; eigener Widget-Titel; Reset auf Standardwerte; Erkennung des Hintergrunddienstes; Unterstützung für dnf und zypper; Sicherheits- und Crossdistro-Verbesserungen.</p>
-        <p xml:lang="en">Renamed to "Die Lage" / "Daily Briefing"; configurable block order; custom widget title; reset-to-defaults; helper service detection; dnf and zypper support; security and cross-distro improvements.</p>
+        <p>Adds upcoming prayer-time highlighting, cleaner weather details and stronger config handling.</p>
+        <p xml:lang="de">Ergänzt Markierung für bevorstehende Gebetszeiten, übersichtlichere Wetterdetails und robusteres Konfigurationshandling.</p>
       </description>
     </release>
   </releases>

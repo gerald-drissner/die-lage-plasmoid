@@ -194,12 +194,10 @@ for d in "$HOME"/.local/share/plasma/plasmoids/com.drissner.dielage*; do
 done
 shopt -u nullglob
 
-# Clear package/QML caches that may still reference old metadata.
-rm -rf "$HOME"/.cache/plasmashell* 2>/dev/null || true
-rm -rf "$HOME"/.cache/org.kde.plasma* 2>/dev/null || true
-rm -rf "$HOME"/.cache/ksycoca6* 2>/dev/null || true
-rm -rf "$HOME"/.cache/qmlcache* 2>/dev/null || true
-rm -rf "$HOME"/.cache/kpackage* 2>/dev/null || true
+# Clear only Die-Lage-specific package/QML cache entries.  The old emergency
+# cleaner still performs a full Plasma cache reset, but the normal installer
+# should not wipe unrelated Plasma caches just to update one applet.
+find "$HOME/.cache" -maxdepth 4 \( -iname '*dielage*' -o -iname '*die-lage*' -o -iname '*com.drissner.dielage*' \) -exec rm -rf {} + 2>/dev/null || true
 
 # ---- Install backend scripts -------------------------------------------------
 install -m 0755 "$BASE_DIR/files/bin/dielage-cache.py"        "$HOME/.local/bin/dielage-cache.py"

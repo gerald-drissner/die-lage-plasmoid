@@ -22,6 +22,10 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+try:
+    from defusedxml.ElementTree import fromstring as safe_xml_fromstring
+except Exception:
+    safe_xml_fromstring = ET.fromstring
 
 BASE_CONFIG_DIR = Path.home() / ".config" / "die-lage"
 BASE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -103,7 +107,25 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
                       'news': False,
                       'system': False}}
 
-UA = "DieLage/1.60.6 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+FALLBACK_DEFAULT_CONFIG = copy.deepcopy(DEFAULT_CONFIG)
+DEFAULT_CONFIG_FILE = BASE_CONFIG_DIR / "default-config.json"
+
+def load_default_config() -> dict:
+    # Keep the shipped default-config.json as the primary source of truth.
+    # The inline dict above remains only as a last-resort fallback for broken
+    # installs, because a cache refresh should not fail merely because the
+    # defaults file was removed.
+    try:
+        data = json.loads(DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return copy.deepcopy(FALLBACK_DEFAULT_CONFIG)
+
+DEFAULT_CONFIG = load_default_config()
+
+UA = "DieLage/1.60.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
 
 # Only allow http/https in user-supplied URLs. Without this guard, a config
@@ -280,7 +302,7 @@ def all_items(root: ET.Element):
         if tag in ("item", "entry"):
             yield elem
 
-def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retries: int = 1) -> str:
+def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retries: int = 1, headers: dict[str, str] | None = None) -> str:
     # Refuse anything that isn't plain HTTP(S). urllib happily handles file://
     # and ftp:// otherwise, which would let a malicious config exfiltrate
     # local files via the feed parser. The check is cheap and only runs once
@@ -291,12 +313,16 @@ def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retrie
     if not parsed.netloc:
         raise ValueError("refusing URL without host")
 
+    request_headers = {
+        "User-Agent": UA,
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, application/json, */*",
+    }
+    if headers:
+        request_headers.update({str(k): str(v) for k, v in headers.items() if v is not None})
+
     req = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": UA,
-            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, application/json, */*",
-        },
+        headers=request_headers,
     )
 
     last_exc = None
@@ -322,7 +348,7 @@ def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retrie
 
 def fetch_feed(url: str, limit: int) -> list[dict[str, str]]:
     data = urlopen_text(url)
-    root = ET.fromstring(data)
+    root = safe_xml_fromstring(data)
 
     entries = []
     for item in all_items(root):
@@ -573,7 +599,7 @@ def feed_updated(item: ET.Element) -> str:
 
 def fetch_warning_feed(label: str, url: str, language: str = "de", source: str = "Feed", include=None, exclude=None) -> list[dict[str, str]]:
     data = urlopen_text(url, timeout=15)
-    root_xml = ET.fromstring(data)
+    root_xml = safe_xml_fromstring(data)
     items = []
     for item in all_items(root_xml):
         title = item_title(item)
@@ -1090,7 +1116,10 @@ def fetch_exchange_rates(currencies: list[str]) -> dict:
     pairs = []
     for code in currencies:
         try:
-            rate = float(rates.get(code))
+            raw_rate = rates.get(code)
+            if raw_rate is None:
+                continue
+            rate = float(raw_rate)
         except Exception:
             continue
         if rate <= 0:
@@ -1232,10 +1261,14 @@ def fetch_index_twelve_data(entry: dict[str, str], api_key: str) -> dict:
         raise ValueError("missing Twelve Data API key")
 
     encoded_symbol = urllib.parse.quote(provider_symbol, safe="")
-    encoded_key = urllib.parse.quote(key, safe="")
     encoded_tz = urllib.parse.quote(MARKET_TIMEZONE, safe="")
-    url = f"https://api.twelvedata.com/quote?symbol={encoded_symbol}&apikey={encoded_key}&timezone={encoded_tz}"
-    payload = json.loads(urlopen_text(url, timeout=12, max_bytes=300_000))
+    url = f"https://api.twelvedata.com/quote?symbol={encoded_symbol}&timezone={encoded_tz}"
+    payload = json.loads(urlopen_text(
+        url,
+        timeout=12,
+        max_bytes=300_000,
+        headers={"Authorization": f"apikey {key}"},
+    ))
 
     if not isinstance(payload, dict):
         raise ValueError("invalid Twelve Data response")
@@ -1400,9 +1433,13 @@ def fetch_index_finnhub(entry: dict[str, str], api_key: str) -> dict:
         raise ValueError("missing symbol")
 
     encoded_symbol = urllib.parse.quote(symbol, safe="")
-    encoded_key = urllib.parse.quote(key, safe="")
-    url = f"https://finnhub.io/api/v1/quote?symbol={encoded_symbol}&token={encoded_key}"
-    payload = json.loads(urlopen_text(url, timeout=12, max_bytes=200_000))
+    url = f"https://finnhub.io/api/v1/quote?symbol={encoded_symbol}"
+    payload = json.loads(urlopen_text(
+        url,
+        timeout=12,
+        max_bytes=200_000,
+        headers={"X-Finnhub-Token": key},
+    ))
 
     if not isinstance(payload, dict):
         raise ValueError("invalid Finnhub response")
@@ -1978,7 +2015,7 @@ def updates_available() -> tuple[str, str]:
     if shutil.which("dnf"):
         try:
             proc = subprocess.run(
-                ["dnf", "-q", "check-update"],
+                ["dnf", "-q", "--cacheonly", "check-update"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,

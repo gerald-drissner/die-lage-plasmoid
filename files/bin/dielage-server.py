@@ -391,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "1.60.6"})
+            self._send_json({"ok": True, "version": "1.60.7"})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":
@@ -422,14 +422,30 @@ class Handler(BaseHTTPRequestHandler):
             # POST /refresh, so a slow feed/API cannot be reported as
             # "Speichern fehlgeschlagen" after the config was already written.
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if length < 0 or length > MAX_POST_BYTES:
+                raw_length = self.headers.get("Content-Length")
+                if raw_length is None:
+                    self._send_json({"ok": False, "error": "missing Content-Length"}, 411)
+                    return
+                try:
+                    length = int(raw_length)
+                except (TypeError, ValueError):
+                    self._send_json({"ok": False, "error": "invalid Content-Length"}, 400)
+                    return
+                if length <= 0:
+                    self._send_json({"ok": False, "error": "empty JSON body"}, 400)
+                    return
+                if length > MAX_POST_BYTES:
                     self._send_json({"ok": False, "error": "payload too large"}, 413)
                     return
                 body = self.rfile.read(length).decode("utf-8")
-                patch = json.loads(body)
+                try:
+                    patch = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    self._send_json({"ok": False, "error": f"invalid JSON: {exc.msg}"}, 400)
+                    return
                 if not isinstance(patch, dict):
-                    raise ValueError("config payload must be a JSON object")
+                    self._send_json({"ok": False, "error": "config payload must be a JSON object"}, 400)
+                    return
                 ensure_config()
                 with CONFIG_LOCK:
                     existing = load_config_without_ensure()

@@ -133,7 +133,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "1.60.6"
+    readonly property string appVersion: "1.60.7"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -1520,6 +1520,25 @@ PlasmoidItem {
         return out
     }
 
+    function addNinaFilters(obj, parts, includeIndex, excludeIndex) {
+        if (parts.length > includeIndex && parts[includeIndex].trim().length > 0) {
+            obj["include"] = parts[includeIndex].trim()
+        }
+        if (parts.length > excludeIndex && parts[excludeIndex].trim().length > 0) {
+            obj["exclude"] = parts[excludeIndex].trim()
+        }
+        return obj
+    }
+
+    function warningFilterSuffix(entry) {
+        var suffix = ""
+        if (entry.include || entry.filter || entry.match || entry.exclude || entry.hide) {
+            suffix += "|" + (entry.include || entry.filter || entry.match || "")
+            suffix += "|" + (entry.exclude || entry.hide || "")
+        }
+        return suffix
+    }
+
     function parseConfigText(text, kind) {
         var normalized = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
         var lines = normalized.split("\n")
@@ -1548,31 +1567,22 @@ PlasmoidItem {
                 })
             } else if (kind === "nina" && parts.length >= 2) {
                 var sourceToken = parts[0].trim().toLowerCase()
-                function addFilters(obj, includeIndex, excludeIndex) {
-                    if (parts.length > includeIndex && parts[includeIndex].trim().length > 0) {
-                        obj["include"] = parts[includeIndex].trim()
-                    }
-                    if (parts.length > excludeIndex && parts[excludeIndex].trim().length > 0) {
-                        obj["exclude"] = parts[excludeIndex].trim()
-                    }
-                    return obj
-                }
                 if ((sourceToken === "de" || sourceToken === "nina" || sourceToken === "bbk") && parts.length >= 3) {
-                    out.push(addFilters({ "source": "nina", "name": parts[1].trim(), "code": parts[2].trim() }, 3, 4))
+                    out.push(root.addNinaFilters({ "source": "nina", "name": parts[1].trim(), "code": parts[2].trim() }, parts, 3, 4))
                 } else if ((sourceToken === "geosphere" || sourceToken === "zamg" || sourceToken === "at" || sourceToken === "austria") && parts.length >= 4) {
-                    out.push(addFilters({ "source": "geosphere", "name": parts[1].trim(), "lat": parseFloat(parts[2].trim()), "lon": parseFloat(parts[3].trim()) }, 4, 5))
+                    out.push(root.addNinaFilters({ "source": "geosphere", "name": parts[1].trim(), "lat": parseFloat(parts[2].trim()), "lon": parseFloat(parts[3].trim()) }, parts, 4, 5))
                 } else if ((sourceToken === "meteoalarm" || sourceToken === "eu" || sourceToken === "europe") && parts.length >= 3) {
-                    out.push(addFilters({ "source": "meteoalarm", "name": parts[1].trim(), "country": parts[2].trim() }, 3, 4))
+                    out.push(root.addNinaFilters({ "source": "meteoalarm", "name": parts[1].trim(), "country": parts[2].trim() }, parts, 3, 4))
                 } else if ((sourceToken === "nws" || sourceToken === "us" || sourceToken === "usa") && parts.length >= 4) {
-                    out.push(addFilters({ "source": "nws", "name": parts[1].trim(), "lat": parseFloat(parts[2].trim()), "lon": parseFloat(parts[3].trim()) }, 4, 5))
+                    out.push(root.addNinaFilters({ "source": "nws", "name": parts[1].trim(), "lat": parseFloat(parts[2].trim()), "lon": parseFloat(parts[3].trim()) }, parts, 4, 5))
                 } else if ((sourceToken === "url" || sourceToken === "feed" || sourceToken === "atom" || sourceToken === "rss") && parts.length >= 3) {
-                    out.push(addFilters({ "source": "url", "name": parts[1].trim(), "url": parts[2].trim() }, 3, 4))
+                    out.push(root.addNinaFilters({ "source": "url", "name": parts[1].trim(), "url": parts[2].trim() }, parts, 3, 4))
                 } else {
-                    out.push(addFilters({
+                    out.push(root.addNinaFilters({
                         "source": "nina",
                         "name": parts[0].trim(),
                         "code": parts[1].trim()
-                    }, 2, 3))
+                    }, parts, 2, 3))
                 }
             } else if (kind === "market" && parts.length >= 2) {
                 var marketEntry = {
@@ -1622,24 +1632,16 @@ PlasmoidItem {
             for (var k = 0; k < data.nina_codes.length; k++) {
                 var n = data.nina_codes[k]
                 var src = String(n.source || "nina").toLowerCase()
-                function filterSuffix(entry) {
-                    var suffix = ""
-                    if (entry.include || entry.filter || entry.match || entry.exclude || entry.hide) {
-                        suffix += "|" + (entry.include || entry.filter || entry.match || "")
-                        suffix += "|" + (entry.exclude || entry.hide || "")
-                    }
-                    return suffix
-                }
                 if (src === "geosphere" || src === "zamg" || src === "at" || src === "austria") {
-                    nina.push("GEOSPHERE|" + (n.name || "") + "|" + (n.lat || "") + "|" + (n.lon || "") + filterSuffix(n))
+                    nina.push("GEOSPHERE|" + (n.name || "") + "|" + (n.lat || "") + "|" + (n.lon || "") + root.warningFilterSuffix(n))
                 } else if (src === "meteoalarm") {
-                    nina.push("METEOALARM|" + (n.name || "") + "|" + (n.country || n.code || "") + filterSuffix(n))
+                    nina.push("METEOALARM|" + (n.name || "") + "|" + (n.country || n.code || "") + root.warningFilterSuffix(n))
                 } else if (src === "nws") {
-                    nina.push("NWS|" + (n.name || "") + "|" + (n.lat || "") + "|" + (n.lon || "") + filterSuffix(n))
+                    nina.push("NWS|" + (n.name || "") + "|" + (n.lat || "") + "|" + (n.lon || "") + root.warningFilterSuffix(n))
                 } else if (src === "url" || src === "feed" || src === "atom" || src === "rss") {
-                    nina.push("URL|" + (n.name || "") + "|" + (n.url || "") + filterSuffix(n))
+                    nina.push("URL|" + (n.name || "") + "|" + (n.url || "") + root.warningFilterSuffix(n))
                 } else {
-                    nina.push("NINA|" + (n.name || "") + "|" + (n.code || "") + filterSuffix(n))
+                    nina.push("NINA|" + (n.name || "") + "|" + (n.code || "") + root.warningFilterSuffix(n))
                 }
             }
         }

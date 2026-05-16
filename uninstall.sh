@@ -83,12 +83,11 @@ for d in "$HOME"/.local/share/plasma/plasmoids/com.drissner.dielage*; do
 done
 shopt -u nullglob
 
-# ---- Clear Plasma caches that may still know about the widget ---------------
-rm -rf "$HOME"/.cache/plasmashell*    2>/dev/null || true
-rm -rf "$HOME"/.cache/org.kde.plasma* 2>/dev/null || true
-rm -rf "$HOME"/.cache/ksycoca6*       2>/dev/null || true
-rm -rf "$HOME"/.cache/qmlcache*       2>/dev/null || true
-rm -rf "$HOME"/.cache/kpackage*       2>/dev/null || true
+# ---- Clear package caches that may still know about this widget -------------
+# Keep the normal uninstaller polite: remove Die-Lage-specific cache entries
+# and rebuild KDE's service cache, but do not wipe all Plasma/QML caches.
+# emergency-clean-dielage.sh remains available for the rare broken-cache case.
+find "$HOME/.cache" -maxdepth 4 \( -iname '*dielage*' -o -iname '*die-lage*' -o -iname '*com.drissner.dielage*' \) -exec rm -rf {} + 2>/dev/null || true
 
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
