@@ -133,7 +133,13 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "1.60.5"
+    readonly property string appVersion: "1.60.6"
+    readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
+    readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
+    // The asset name is intentionally stable. Every public release should upload
+    // die-lage-latest.zip in addition to the versioned installer ZIP, so first-run
+    // users can always click the same download link from the setup screen.
+    readonly property string latestInstallerZipUrl: projectUrl + "/releases/latest/download/die-lage-latest.zip"
 
     // User-chosen custom title; empty string means "use the localized default".
     // Used by Plasmoid.title (which feeds the panel tooltip and popup header)
@@ -736,8 +742,9 @@ PlasmoidItem {
             "aboutHelperOk": "Local helper service: running",
             "aboutHelperMissing": "Local helper service: not reachable",
             "helperMissingTitle": "Setup needed",
-            "helperMissingBody": "This widget needs a small local background service that fetches RSS feeds and other data in the background. If you installed the widget through the KDE Store, only the Plasma package is present; the local helper still has to be installed once from the full release zip.",
-            "helperMissingHint": "Download the full release zip from the project page, unpack it in Downloads, run install.sh, then click Retry. The service runs as a normal systemd user service; after Plasma starts, no root privileges are needed.",
+            "helperMissingBody": "This widget needs a small local background service that fetches RSS feeds and other data in the background. If you installed the widget through the KDE Store, only the visible Plasma package is present. The local helper must be installed once from the full installer ZIP.",
+            "helperMissingHint": "Click Download installer ZIP, save it to Downloads, unpack it, run the commands below, then click Retry. The helper scripts and systemd user units are already included in the ZIP; no root password is needed because the service runs as a normal systemd user service.",
+            "downloadInstallerZip": "Download installer ZIP",
             "uninstallTitle": "Complete removal",
             "uninstallText": "Plasma can remove the visible widget, but not reliably the local helper scripts, cache timer and systemd user units. Use these commands for a clean uninstall.",
             "uninstallCommands": "dielage-uninstall\n# complete removal including config and cache:\ndielage-uninstall --purge\n# if the command is not in PATH:\n~/.local/bin/dielage-uninstall --purge",
@@ -937,8 +944,9 @@ PlasmoidItem {
             "aboutHelperOk": "Lokaler Hintergrunddienst: läuft",
             "aboutHelperMissing": "Lokaler Hintergrunddienst: nicht erreichbar",
             "helperMissingTitle": "Einrichtung erforderlich",
-            "helperMissingBody": "Dieses Widget braucht einen kleinen lokalen Hintergrunddienst, der RSS-Feeds und weitere Daten im Hintergrund abruft. Wenn Sie das Widget über den KDE Store installiert haben, ist nur das Plasma-Paket vorhanden; der lokale Helper muss einmalig aus dem vollständigen Release-Zip installiert werden.",
-            "helperMissingHint": "Laden Sie das vollständige Release-Zip von der Projektseite herunter, entpacken Sie es in Downloads, führen Sie install.sh aus und klicken Sie danach auf Erneut verbinden. Der Dienst läuft als normaler systemd-User-Service; nach dem Plasma-Start sind keine Root-Rechte mehr nötig.",
+            "helperMissingBody": "Dieses Widget braucht einen kleinen lokalen Hintergrunddienst, der RSS-Feeds und weitere Daten im Hintergrund abruft. Wenn Sie das Widget über den KDE Store installiert haben, ist nur das sichtbare Plasma-Paket vorhanden. Der lokale Helper muss einmalig aus dem vollständigen Installer-ZIP installiert werden.",
+            "helperMissingHint": "Klicken Sie auf Installer-ZIP herunterladen, speichern Sie die Datei im Ordner Downloads, entpacken Sie sie, führen Sie die unten stehenden Befehle aus und klicken Sie danach auf Erneut verbinden. Die Helper-Skripte und systemd-User-Units sind bereits im ZIP enthalten; kein Root-Passwort ist nötig, weil der Dienst als normaler systemd-User-Service läuft.",
+            "downloadInstallerZip": "Installer-ZIP herunterladen",
             "uninstallTitle": "Komplett deinstallieren",
             "uninstallText": "Plasma kann das sichtbare Widget entfernen, aber nicht zuverlässig lokale Helper-Skripte, Cache-Timer und systemd-User-Units. Für eine saubere Deinstallation verwenden Sie diese Befehle.",
             "uninstallCommands": "dielage-uninstall\n# vollständig inkl. Konfiguration und Cache:\ndielage-uninstall --purge\n# falls der Befehl nicht im PATH ist:\n~/.local/bin/dielage-uninstall --purge",
@@ -1024,6 +1032,15 @@ PlasmoidItem {
             return
         }
         Qt.openUrlExternally(url)
+    }
+
+    function helperInstallCommands() {
+        return "cd ~/Downloads\n"
+            + "unzip -o die-lage-latest.zip\n"
+            + "cd die-lage-latest\n"
+            + "chmod +x install.sh uninstall.sh emergency-clean-dielage.sh\n"
+            + "./install.sh\n"
+            + "systemctl --user restart plasma-plasmashell.service"
     }
 
     function escapeRegExp(value) {
@@ -5402,17 +5419,43 @@ PlasmoidItem {
                     opacity: 0.86
                 }
 
-                // The copy-paste setup command. The path is the one the user
-                // gets after downloading the project zip; we display it as a
-                // read-only TextField so it can be selected and copied.
-                Rectangle {
+                Flow {
                     Layout.fillWidth: true
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.rightMargin: Kirigami.Units.largeSpacing
-                    Layout.preferredHeight: setupCmd.implicitHeight + Kirigami.Units.largeSpacing * 2
-                    radius: Kirigami.Units.smallSpacing
-                    color: Kirigami.Theme.textColor
-                    opacity: 0.08
+                    spacing: Kirigami.Units.smallSpacing
+
+                    QQC2.Button {
+                        text: root.t("downloadInstallerZip")
+                        icon.name: "download"
+                        font.pixelSize: root.smallSize
+                        onClicked: root.openExternalUrl(root.latestInstallerZipUrl)
+                    }
+
+                    QQC2.Button {
+                        text: root.t("openHomepage")
+                        icon.name: "globe"
+                        font.pixelSize: root.smallSize
+                        onClicked: root.openExternalUrl(root.projectUrl)
+                    }
+
+                    QQC2.Button {
+                        text: root.t("retryConnection")
+                        icon.name: "view-refresh"
+                        font.pixelSize: root.smallSize
+                        onClicked: root.loadConfig()
+                    }
+                }
+
+                PlasmaComponents3.Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
+                    text: root.t("helperMissingHint")
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                    font.pixelSize: root.smallSize
+                    opacity: 0.72
                 }
 
                 RowLayout {
@@ -5421,14 +5464,24 @@ PlasmoidItem {
                     Layout.rightMargin: Kirigami.Units.largeSpacing
                     spacing: Kirigami.Units.smallSpacing
 
-                    QQC2.TextField {
-                        id: setupCmd
+                    Rectangle {
                         Layout.fillWidth: true
-                        readOnly: true
-                        selectByMouse: true
-                        font.family: "monospace"
-                        font.pixelSize: root.smallSize
-                        text: "cd ~/Downloads/die-lage-v" + root.appVersion + " && ./install.sh"
+                        Layout.preferredHeight: setupCmd.implicitHeight + Kirigami.Units.largeSpacing
+                        radius: Kirigami.Units.smallSpacing
+                        color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.08)
+
+                        QQC2.TextArea {
+                            id: setupCmd
+                            anchors.fill: parent
+                            anchors.margins: Kirigami.Units.smallSpacing
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.Wrap
+                            font.family: "monospace"
+                            font.pixelSize: root.smallSize
+                            text: root.helperInstallCommands()
+                            background: null
+                        }
                     }
 
                     QQC2.Button {
@@ -5450,41 +5503,6 @@ PlasmoidItem {
                             onTriggered: copyButton.copied = false
                         }
                     }
-                }
-
-                PlasmaComponents3.Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: Kirigami.Units.largeSpacing
-                    Layout.rightMargin: Kirigami.Units.largeSpacing
-                    text: root.t("helperMissingHint")
-                    wrapMode: Text.WordWrap
-                    elide: Text.ElideNone
-                    font.pixelSize: root.smallSize
-                    opacity: 0.72
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: Kirigami.Units.largeSpacing
-                    spacing: Kirigami.Units.smallSpacing
-
-                    Item { Layout.fillWidth: true }
-
-                    QQC2.Button {
-                        text: root.t("openHomepage")
-                        icon.name: "globe"
-                        font.pixelSize: root.smallSize
-                        onClicked: root.openExternalUrl("https://drissner.media")
-                    }
-
-                    QQC2.Button {
-                        text: root.t("retryConnection")
-                        icon.name: "view-refresh"
-                        font.pixelSize: root.smallSize
-                        onClicked: root.loadConfig()
-                    }
-
-                    Item { Layout.fillWidth: true }
                 }
 
                 Item { Layout.fillWidth: true; Layout.fillHeight: true }

@@ -103,7 +103,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
                       'news': False,
                       'system': False}}
 
-UA = "DieLage/1.60.5 (+https://drissner.media)"
+UA = "DieLage/1.60.6 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
 
 # Only allow http/https in user-supplied URLs. Without this guard, a config

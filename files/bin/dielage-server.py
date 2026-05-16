@@ -391,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "1.60.5"})
+            self._send_json({"ok": True, "version": "1.60.6"})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":

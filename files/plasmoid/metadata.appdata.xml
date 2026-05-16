@@ -3,9 +3,9 @@
   <id>com.drissner.dielage</id>
   <extends>org.kde.plasmashell</extends>
   <name>Die Lage</name>
-  <name xml:lang="en">Die Lage (Daily Briefing)</name>
+  <name xml:lang="en">Daily Briefing</name>
   <summary>Kompaktes Lagebild aus Nachrichten, Wetter, Warnmeldungen und Märkten</summary>
-  <summary xml:lang="en">Compact current-affairs board with news, weather, warnings and markets</summary>
+  <summary xml:lang="en">Compact board with news, weather, warnings, prayer times, markets and system info</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <developer id="com.drissner">
@@ -13,12 +13,6 @@
   </developer>
   <update_contact>mail@drissner.media</update_contact>
   <description>
-    <p>
-      Der Name „Die Lage“ ist bewusst journalistisch gemeint: Er steht für
-      den aktuellen Stand der Dinge, also für die Frage, was gerade wichtig
-      ist und im Blick bleiben sollte. In der englischen Oberfläche heißt
-      das Widget „Daily Briefing“.
-    </p>
     <p>
       Die Lage zeigt auf einen Blick, was gerade los ist: RSS-Nachrichten aus
       deutsch- und englischsprachigen Quellen, das aktuelle Wetter für
@@ -42,13 +36,6 @@
       wählbares Panel-Symbol sind ebenfalls möglich.
     </p>
     <p xml:lang="en">
-      Die Lage means roughly “the situation” or “the current state of
-      affairs”. In German journalism, the phrase points to the daily
-      editorial question: what is happening, what matters right now, and
-      what needs to be kept in view. The English name used inside the widget
-      is Daily Briefing.
-    </p>
-    <p xml:lang="en">
       Daily Briefing shows what's happening at a glance: RSS news from
       German- and English-language sources, current weather for multiple
       locations, official warnings (NINA, MeteoAlarm, GeoSphere Austria, US
@@ -69,8 +56,8 @@
       icon are supported.
     </p>
   </description>
-  <url type="homepage">https://drissner.media</url>
-  <url type="bugtracker">https://drissner.media/kontakt</url>
+  <url type="homepage">https://github.com/gerald-drissner/die-lage-plasmoid</url>
+  <url type="bugtracker">https://github.com/gerald-drissner/die-lage-plasmoid/issues</url>
   <url type="contact">https://drissner.media/kontakt</url>
   <url type="donation">https://www.paypal.me/drissner</url>
   <categories>
@@ -106,6 +93,12 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.60.6" date="2026-05-16">
+      <description>
+        <p>Improves the first-run setup screen with a direct GitHub installer ZIP download button, GitHub project link, and clearer copyable helper installation commands.</p>
+        <p xml:lang="de">Verbessert den Einrichtungsbildschirm mit direktem GitHub-Download für das Installer-ZIP, GitHub-Projektlink und klareren kopierbaren Installationsbefehlen für den Helper.</p>
+      </description>
+    </release>
     <release version="1.60.5" date="2026-05-15">
       <description>
         <p>Final publishing polish: hardens plain-text rendering for feed/index names and improves panel popup width state tracking for narrow popup layouts.</p>

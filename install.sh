@@ -318,7 +318,7 @@ for key, value in default_ui.items():
     else:
         ui.setdefault(key, value)
 
-# v1.60.5: 1000 px was too wide as a default panel popup. If the stored
+# v1.60.6: 1000 px was too wide as a default panel popup. If the stored
 # value is exactly the old bundled default, migrate it to the new default.
 # Custom values other than 1000 are preserved.
 try:

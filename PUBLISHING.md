@@ -37,16 +37,16 @@ installiert nur das sichtbare Plasma-Widget. Nach dem ersten Start zeigt
 das Widget eine Einrichtungsseite. Dort steht, dass das vollständige Release-
 Zip heruntergeladen und ./install.sh einmalig ausgeführt werden muss.
 
-Vollständiges Bundle / Installer: https://drissner.media
+Vollständiges Bundle / Installer: https://github.com/gerald-drissner/die-lage-plasmoid
 ```
 
 ## Upload recommendation
 
 Upload both artifacts for the same version:
 
-- `die-lage-1.60.5.plasmoid` as the Plasma widget package.
-- `die-lage-v1.60.5.zip` as the full installer bundle for users who need the local helper service.
-- Use the separate `die-lage-store-assets-v1.60.5.zip` package for KDE Store artwork. Recommended files: `dielage-icon-512.png` as project icon/upload image and `dielage-wordmark-1200x400.png` as a banner/README asset if the store form allows it.
+- `die-lage-1.60.6.plasmoid` as the Plasma widget package.
+- `die-lage-v1.60.6.zip` as the full installer bundle for users who need the local helper service.
+- Use the separate `die-lage-store-assets-v1.60.6.zip` package for KDE Store artwork. Recommended files: `dielage-icon-512.png` as project icon/upload image and `dielage-wordmark-1200x400.png` as a banner/README asset if the store form allows it.
 
 Do not promise automatic backend activation through the KDE Store. The first-run helper-missing screen explains the required manual installer step.
 
@@ -57,10 +57,10 @@ The KDE Store accepts a `.plasmoid` file (just a zip with a specific layout). To
 
 ```bash
 cd files/plasmoid
-zip -r ../../die-lage-1.60.5.plasmoid . -x '*.pyc' '*/__pycache__/*'
+zip -r ../../die-lage-1.60.6.plasmoid . -x '*.pyc' '*/__pycache__/*'
 ```
 
-The resulting `die-lage-1.60.5.plasmoid` contains:
+The resulting `die-lage-1.60.6.plasmoid` contains:
 
 ```
 metadata.json
@@ -90,7 +90,7 @@ This means the KDE Store version and the installer bundle are paired but uploade
 - `KPlugin.Id: com.drissner.dielage`
 - `KPlugin.Name` (DE) / `KPlugin.Name[en]`
 - `KPlugin.Description` (DE) / `KPlugin.Description[en]`
-- `KPlugin.Version: 1.60.5`
+- `KPlugin.Version: 1.60.6`
 - AppStream `update_contact` and `provides` block
 - `KPlugin.License: MIT`
 - `KPlugin.Authors`
@@ -103,7 +103,7 @@ This means the KDE Store version and the installer bundle are paired but uploade
 
 `metadata.json` now uses a package-relative icon path (`/icons/dielage.svg`) so Plasma versions that support bundled widget icons can show the Die-Lage symbol in the Widget Explorer. The compact panel view uses a deliberately simplified `contents/images/dielage-panel.svg`, because the full dashboard icon is too detailed at 16–24 px. Users can still switch the panel icon in Settings → Appearance → Panel icon: bundled Die Lage icon or a named Plasma/Breeze icon.
 
-Artwork is shipped separately in `die-lage-store-assets-v1.60.5.zip`:
+Artwork is shipped separately in `die-lage-store-assets-v1.60.6.zip`:
 
 - `dielage-icon.svg`
 - `dielage-icon-256.png`
