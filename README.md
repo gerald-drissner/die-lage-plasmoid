@@ -1,7 +1,8 @@
 # Die Lage (Daily Briefing)
 
-**Die Lage** is a KDE Plasma 6 widget for a compact current-affairs board with RSS news, weather, public warnings, Islamic prayer times, markets and Linux system status.
+**Die Lage** (“Daily Briefing”, pronounced roughly **dee LAH-guh**) is a KDE Plasma widget for a compact current-affairs board with RSS news, weather, public warnings, Islamic prayer times, markets and system status.
 
+The German phrase “Die Lage” means roughly “the situation” or “the current state of affairs”. In German journalism, it points to the daily editorial question: what is happening, what matters right now, and what needs to be kept in view.
 The German phrase **„Die Lage“** means roughly **“the situation”** or **“the current state of affairs”**. In German journalism, it points to the daily editorial question: what is happening, what matters right now, and what needs to be kept in view. The English name used inside the widget is **Daily Briefing**.
 
 Die Lage works in a Plasma panel, but it is designed to work best on a portrait-oriented second or third screen, ideally with a dark or black desktop background.
