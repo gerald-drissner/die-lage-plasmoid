@@ -6,7 +6,10 @@ from pathlib import Path
 import copy
 import json
 import os
+import shutil
 import subprocess
+import sys
+import importlib.util
 import threading
 import time
 import urllib.parse
@@ -22,12 +25,39 @@ CACHE_FILE = CACHE_DIR / "rss.json"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_CONFIG_FILE = CONFIG_DIR / "default-config.json"
 CACHE_SCRIPT = HOME / ".local" / "bin" / "dielage-cache.py"
+SYSTEMD_USER_DIR = HOME / ".config" / "systemd" / "user"
+BOOT_TIMER_FILE = SYSTEMD_USER_DIR / "dielage-cache-boot.timer"
 
 HOST = "127.0.0.1"
-PORT = 8765
+DEFAULT_PORT = 8765
+PORT_MIN = 8765
+PORT_MAX = 8775
+
+def clamp_port(value) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        n = DEFAULT_PORT
+    return max(PORT_MIN, min(PORT_MAX, n))
+
+def configured_server_port() -> int:
+    # Read the port very early, before the HTTP server binds.  Keep this
+    # deliberately independent from merge_config() because that function is
+    # defined later and may itself need the server constants.
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return clamp_port(data.get("local_server_port", DEFAULT_PORT))
+    except Exception:
+        pass
+    return DEFAULT_PORT
+
+PORT = configured_server_port()
 REFRESH_LOCK = threading.Lock()
 CONFIG_LOCK = threading.Lock()
-ALLOWED_ORIGINS = {"", "file://", f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"}
+
+def allowed_origins_for_port(port: int) -> set[str]:
+    return {"", "file://", f"http://{HOST}:{port}", f"http://localhost:{port}"}
 
 # Hard cap on POST body size. The legitimate config payload is a few kB; this
 # limit exists only so a buggy or hostile loopback caller cannot exhaust RAM
@@ -72,6 +102,9 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
              'show_indices': True,
              'show_stocks': True},
  'fetch_interval_minutes': 10,
+ 'local_server_port': 8765,
+ 'boot_refresh_enabled': True,
+ 'boot_refresh_delay_seconds': 120,
  'system': {'show_info': True,
             'show_network': True,
             'show_public_network': False,
@@ -130,14 +163,23 @@ def migrate_indices(markets: dict) -> None:
             item["symbol"] = canonical_index_symbol(item.get("symbol", ""))
 
 
+_DEFAULT_CONFIG_CACHE: dict | None = None
+
 def load_default_config() -> dict:
-    try:
-        data = json.loads(DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-    return copy.deepcopy(DEFAULT_CONFIG)
+    # Read the shipped defaults once per helper-server process. Returning a
+    # deep copy keeps callers free to mutate their config snapshots without
+    # accidentally changing the process-wide defaults.
+    global _DEFAULT_CONFIG_CACHE
+    if _DEFAULT_CONFIG_CACHE is None:
+        try:
+            data = json.loads(DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _DEFAULT_CONFIG_CACHE = data
+        except Exception:
+            pass
+        if _DEFAULT_CONFIG_CACHE is None:
+            _DEFAULT_CONFIG_CACHE = copy.deepcopy(DEFAULT_CONFIG)
+    return copy.deepcopy(_DEFAULT_CONFIG_CACHE)
 
 def atomic_write_json(path: Path, data: dict) -> None:
     # Write to a unique tmp file in the same directory, then rename atomically.
@@ -159,6 +201,113 @@ def atomic_write_json(path: Path, data: dict) -> None:
             # Best-effort cleanup; surface the original error, not the cleanup error.
             pass
         raise
+
+
+
+
+def clamp_int(value, fallback: int, min_value: int, max_value: int) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        n = fallback
+    return max(min_value, min(max_value, n))
+
+
+def boot_refresh_enabled(config: dict) -> bool:
+    # User switch for the first forced cache refresh after login/reboot.
+    # Default remains enabled because fresh sessions should populate data after
+    # networking/VPN has had a short moment to settle.
+    return bool(config.get("boot_refresh_enabled", True))
+
+
+def boot_refresh_delay_seconds(config: dict) -> int:
+    # User-configurable delay for the first forced cache refresh after login.
+    # Keep the clamp conservative: too low races slow network/VPN startup; too
+    # high makes the widget look stale after login. Users can still choose.
+    return clamp_int(config.get("boot_refresh_delay_seconds", 120), 120, 10, 1800)
+
+
+def local_server_port(config: dict) -> int:
+    # Keep the configurable helper port in a small known range so the QML side
+    # can rediscover the service if the user changes away from the default.
+    # This is meant to solve local port conflicts, not to publish the helper.
+    return clamp_int(config.get("local_server_port", DEFAULT_PORT), DEFAULT_PORT, PORT_MIN, PORT_MAX)
+
+
+def boot_timer_unit_text(delay_seconds: int) -> str:
+    return f"""[Unit]
+Description=Run initial Die Lage cache refresh after login/reboot
+
+[Timer]
+OnStartupSec={delay_seconds}s
+AccuracySec=15s
+Unit=dielage-cache-boot.service
+
+[Install]
+WantedBy=timers.target
+"""
+
+
+def apply_boot_timer_config(config: dict) -> None:
+    """Best-effort update of the systemd user boot timer.
+
+    Saving settings must not immediately re-arm the boot/login timer.
+    OnStartupSec is measured from timer activation, not from the real boot
+    timestamp, so using enable --now here would start a fresh countdown every
+    time the user saves settings.  We only rewrite the unit when the text
+    changed, reload systemd in that case, and keep the timer enabled or
+    disabled for the next login/reboot according to the user's setting.
+    """
+    try:
+        SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
+        enabled = boot_refresh_enabled(config)
+        delay = boot_refresh_delay_seconds(config)
+        text = boot_timer_unit_text(delay)
+        current = BOOT_TIMER_FILE.read_text(encoding="utf-8") if BOOT_TIMER_FILE.exists() else None
+        changed = current != text
+        if changed:
+            BOOT_TIMER_FILE.write_text(text, encoding="utf-8")
+            subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+        if enabled:
+            if changed:
+                subprocess.run(["systemctl", "--user", "reenable", "dielage-cache-boot.timer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+            else:
+                subprocess.run(["systemctl", "--user", "enable", "dielage-cache-boot.timer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+        else:
+            subprocess.run(["systemctl", "--user", "disable", "--now", "dielage-cache-boot.timer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+    except Exception:
+        # Do not break normal config saving if systemd is unavailable.
+        pass
+
+
+def clear_cache_files() -> list[str]:
+    """Delete Die-Lage cache files only; never touch config.json."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    removed: list[str] = []
+    for path in CACHE_DIR.iterdir():
+        if not path.is_file():
+            continue
+        # rss.json is the real cache. tmp files are atomic-write leftovers.
+        if path.name == "rss.json" or path.name.startswith("rss.json.tmp."):
+            try:
+                path.unlink()
+                removed.append(path.name)
+            except FileNotFoundError:
+                pass
+    return removed
+
+
+def delayed_service_restart() -> None:
+    # Spawn a detached child immediately and let the child sleep.  This survives
+    # the parent process exiting during the small delay window, unlike a daemon
+    # Python thread that can be killed before it calls systemctl.
+    subprocess.Popen(
+        ["sh", "-c", "sleep 0.35; systemctl --user restart dielage-local-server.service"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
 
 def ensure_config() -> None:
     if not CONFIG_FILE.exists():
@@ -204,7 +353,10 @@ def merge_config(data: dict) -> dict:
     data.setdefault("nina_codes", copy.deepcopy(defaults["nina_codes"]))
     data.setdefault("prayer", copy.deepcopy(defaults["prayer"]))
     data.setdefault("system", copy.deepcopy(defaults.get("system", {"show_info": True, "show_network": True, "show_public_network": False, "show_vpn": True, "vpn_label": "", "show_updates": True})))
-    data.setdefault("fetch_interval_minutes", defaults["fetch_interval_minutes"])
+    data["fetch_interval_minutes"] = clamp_int(data.get("fetch_interval_minutes", defaults["fetch_interval_minutes"]), defaults["fetch_interval_minutes"], 1, 1440)
+    data["local_server_port"] = local_server_port(data)
+    data["boot_refresh_enabled"] = boot_refresh_enabled(data)
+    data["boot_refresh_delay_seconds"] = boot_refresh_delay_seconds(data)
 
     ui = data.setdefault("ui", {})
     if not isinstance(ui, dict):
@@ -212,6 +364,11 @@ def merge_config(data: dict) -> dict:
         data["ui"] = ui
     for key, value in defaults["ui"].items():
         ui.setdefault(key, value)
+    ui["font_size"] = clamp_int(ui.get("font_size", defaults["ui"].get("font_size", 18)), defaults["ui"].get("font_size", 18), 12, 34)
+    ui["news_font_size"] = clamp_int(ui.get("news_font_size", defaults["ui"].get("news_font_size", 19)), defaults["ui"].get("news_font_size", 19), 10, 42)
+    ui["news_font_size_offset"] = clamp_int(ui.get("news_font_size_offset", defaults["ui"].get("news_font_size_offset", 1)), defaults["ui"].get("news_font_size_offset", 1), -3, 6)
+    ui["panel_width"] = clamp_int(ui.get("panel_width", defaults["ui"].get("panel_width", 24)), defaults["ui"].get("panel_width", 24), 16, 96)
+    ui["panel_popup_width"] = clamp_int(ui.get("panel_popup_width", defaults["ui"].get("panel_popup_width", 600)), defaults["ui"].get("panel_popup_width", 600), 520, 1400)
 
     blocks = data.setdefault("blocks", {})
     if not isinstance(blocks, dict):
@@ -288,6 +445,79 @@ def run_refresh() -> bool:
     finally:
         REFRESH_LOCK.release()
 
+
+def _command_status(command: str, label: str, note: str = "") -> dict:
+    path = shutil.which(command)
+    return {
+        "id": command,
+        "label": label,
+        "installed": bool(path),
+        "path": path or "",
+        "note": note,
+    }
+
+
+def _module_status(module: str, label: str, note: str = "") -> dict:
+    found = importlib.util.find_spec(module) is not None
+    return {
+        "id": module,
+        "label": label,
+        "installed": found,
+        "path": "python module" if found else "",
+        "note": note,
+    }
+
+
+def tool_status() -> dict:
+    """Return the helper/runtime tools Die Lage can use on this machine."""
+    python_item = {
+        "id": "python3",
+        "label": "Python 3",
+        "installed": True,
+        "path": sys.executable or "python3",
+        "note": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+    }
+
+    required = [
+        python_item,
+        _command_status("systemctl", "systemctl", "systemd user services and timers"),
+    ]
+
+    recommended = [
+        _command_status("unzip", "unzip", "unpacks the full installer ZIP"),
+        _module_status("defusedxml", "python3-defusedxml", "safer RSS/Atom XML parsing"),
+        _command_status("curl", "curl", "manual status/debug checks"),
+        _command_status("kbuildsycoca6", "kbuildsycoca6", "refreshes Plasma's service cache after install"),
+    ]
+
+    optional = [
+        _command_status("ip", "iproute2 / ip", "network interface and route detection"),
+        _command_status("nmcli", "NetworkManager / nmcli", "VPN/network connection names"),
+        _command_status("resolvectl", "resolvectl", "DNS server display"),
+        _command_status("lspci", "lspci", "GPU hardware detection"),
+        _command_status("lscpu", "lscpu", "CPU model fallback"),
+        _command_status("nvidia-smi", "nvidia-smi", "NVIDIA GPU/driver details"),
+        _command_status("checkupdates", "checkupdates", "Arch update count"),
+        _command_status("pacman", "pacman", "Arch package update fallback"),
+        _command_status("apt", "apt", "Debian/Ubuntu update count"),
+        _command_status("dnf", "dnf", "Fedora/RHEL update count"),
+        _command_status("zypper", "zypper", "openSUSE update count"),
+        _command_status("mullvad", "mullvad", "Mullvad VPN status"),
+        _command_status("warp-cli", "warp-cli", "Cloudflare WARP status"),
+        _command_status("tailscale", "tailscale", "Tailscale status"),
+        _command_status("nordvpn", "nordvpn", "NordVPN status"),
+    ]
+
+    return {
+        "ok": True,
+        "version": "2.0.4",
+        "required": required,
+        "recommended": recommended,
+        "optional": optional,
+        "missing_required": [item for item in required if not item.get("installed")],
+        "missing_recommended": [item for item in recommended if not item.get("installed")],
+    }
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "DieLageLocal/1"
     sys_version = ""
@@ -300,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _origin_allowed(self) -> bool:
         origin = self._request_origin()
-        if origin in ALLOWED_ORIGINS:
+        if origin in allowed_origins_for_port(PORT):
             return True
         # Some Qt/QML builds send file://... as Origin; browsers normally send
         # http(s) origins.  Allow local file origins for the plasmoid, reject
@@ -324,10 +554,10 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _send_cors_headers(self):
+        self.send_header("Vary", "Origin")
         origin = self._request_origin()
         if origin and self._origin_allowed():
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
 
     def _send_json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -357,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._reject_if_bad_origin():
             return
         path = urllib.parse.urlparse(self.path).path
-        if path in ("/status", "/rss.json", "/config"):
+        if path in ("/status", "/rss.json", "/config", "/tools"):
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Cache-Control", "no-store")
@@ -391,11 +621,13 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "1.60.7"})
+            self._send_json({"ok": True, "version": "2.0.4", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":
             self._send_json(load_current_config())
+        elif path == "/tools":
+            self._send_json(tool_status())
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -408,7 +640,7 @@ class Handler(BaseHTTPRequestHandler):
         # This blocks old-fashioned CSRF vectors such as plain HTML forms or
         # no-cors text/plain fetches that might omit an Origin header.  QML sets
         # the header explicitly for /config, /refresh and /reset.
-        if path in ("/config", "/refresh", "/reset") and self._json_post_required():
+        if path in ("/config", "/refresh", "/reset", "/clear-cache", "/restart") and self._json_post_required():
             return
 
         if path == "/refresh":
@@ -449,9 +681,29 @@ class Handler(BaseHTTPRequestHandler):
                 ensure_config()
                 with CONFIG_LOCK:
                     existing = load_config_without_ensure()
+                    old_port = local_server_port(existing)
                     data = merge_config(deep_update(existing, patch))
+                    new_port = local_server_port(data)
                     atomic_write_json(CONFIG_FILE, data)
-                self._send_json({"ok": True})
+                    apply_boot_timer_config(data)
+                self._send_json({"ok": True, "local_server_port": new_port, "server_restart_required": old_port != new_port})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/clear-cache":
+            try:
+                removed = clear_cache_files()
+                self._send_json({"ok": True, "removed": removed})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/restart":
+            try:
+                # Do not restart while another request is still saving config or
+                # rewriting the boot timer.  The lock is normally released quickly;
+                # waiting here prevents killing ourselves mid-write.
+                with CONFIG_LOCK:
+                    pass
+                self._send_json({"ok": True, "restarting": True})
+                delayed_service_restart()
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/reset":
@@ -462,6 +714,7 @@ class Handler(BaseHTTPRequestHandler):
                 defaults = copy.deepcopy(load_default_config())
                 with CONFIG_LOCK:
                     atomic_write_json(CONFIG_FILE, defaults)
+                    apply_boot_timer_config(defaults)
                 self._send_json({"ok": True})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
@@ -475,4 +728,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ensure_config()
+    try:
+        apply_boot_timer_config(load_current_config())
+    except Exception:
+        pass
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

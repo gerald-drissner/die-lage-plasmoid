@@ -16,7 +16,7 @@ PlasmoidItem {
     height: Kirigami.Units.gridUnit * 47
     // Keep popup sizing on fullRepresentation only. Putting the popup width
     // on the PlasmoidItem itself makes Plasma stretch the compact panel icon,
-    // which is visually absurd and therefore naturally tempting.
+    // which is visually distracting in compact panel layouts.
 
     Plasmoid.icon: root.effectivePlasmoidIcon()
     Plasmoid.title: root.displayTitle()
@@ -55,9 +55,15 @@ PlasmoidItem {
     switchWidth: Kirigami.Units.gridUnit * 22
     switchHeight: Kirigami.Units.gridUnit * 18
 
-    property string baseUrl: "http://127.0.0.1:8765"
+    property int activeServerPort: 8765
+    property string localServerPort: "8765"
+    readonly property int helperPortMin: 8765
+    readonly property int helperPortMax: 8775
+    property bool portDiscoveryInProgress: false
+    property int pendingServerPort: 0
+    property string baseUrl: root.serverUrlForPort(root.activeServerPort)
     readonly property int requestTimeoutMs: 25000
-    property var rssData: ({ "updated": "", "feeds": [], "errors": [], "nina": {"items": []}, "weather": {"items": []}, "prayer": {"items": []}, "markets": {"exchange": {"items": []}, "indices": {"items": []}, "stocks": {"items": []}}, "system": {"items": []} })
+    property var rssData: root.emptyRssData()
     property string errorText: ""
 
     property bool settingsOpen: false
@@ -86,8 +92,15 @@ PlasmoidItem {
     property string newsFontFamily: ""
     property string newsFontSize: "19"
     property string newsFontSizeOffset: "1"
+    // Keep the RSS/news font in step when the global font size changes.
+    // The explicit news font setting still works; it simply moves along by
+    // the same delta as the main UI font on later changes.
+    property int newsSyncBaseFontSize: 18
+    property bool newsFontSyncInProgress: false
     property string uiLanguage: "de"
     property string fetchIntervalMinutes: "10"
+    property bool bootRefreshEnabled: true
+    property string bootRefreshDelaySeconds: "120"
 
     // Panel-mode appearance: "icon" (small icon + tooltip, default) or
     // "warnings" (compact warning status).  Only relevant when the applet
@@ -133,7 +146,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "1.60.7"
+    readonly property string appVersion: "2.0.4"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -154,7 +167,7 @@ PlasmoidItem {
     property var collapsedBlocks: ({})
 
     // Health flag for the local helper service. Toggled by loadCache() /
-    // loadConfig() based on whether http://127.0.0.1:8765 answers. Used to
+    // loadConfig() based on whether the local helper answers. Used to
     // show the helper-missing setup screen instead of an empty popup.
     property bool helperOk: true
     property bool initialLoadDone: false
@@ -174,21 +187,58 @@ PlasmoidItem {
 
     property string helperStatusMessage: ""
     property bool helperStatusChecking: false
+    property string toolsStatusMessage: ""
+    property bool toolsStatusChecking: false
+    property bool toolsStatusOk: true
+    property bool cacheClearing: false
+    property string cacheActionMessage: ""
+    property bool cacheActionOk: true
+    property bool serviceRestarting: false
+    property bool resetConfirmVisible: false
     property bool showMarketCurrencies: true
     property bool showMarketIndices: true
     property bool showMarketStocks: true
     property bool showNews: true
 
     property int baseFontSize: root.clampInt(root.uiFontSize, 18, 12, 34)
+    onBaseFontSizeChanged: root.syncNewsFontToBaseFontChange()
     property int titleSize: root.baseFontSize + 7
     property int sectionSize: root.baseFontSize + 3
     property int bodySize: root.baseFontSize
+    // Explicit RSS/news text size. This intentionally uses newsFontSize directly so
+    // RSS feed names and headlines can be adjusted independently from the rest of the widget.
     property int newsBodySize: root.clampInt(root.newsFontSize, Math.max(10, root.bodySize + root.clampInt(root.newsFontSizeOffset, 1, -3, 6)), 10, 42)
     property int smallSize: Math.max(10, root.baseFontSize - 3)
     property int prayerSize: Math.max(10, root.baseFontSize - 3)
     property int prayerColumns: root.width >= 620 ? 3 : 2
     property double nowTick: Date.now()
     property color appHighlightColor: root.validHexColor(root.uiHighlightColor) ? root.normalizedHexColor(root.uiHighlightColor) : Kirigami.Theme.highlightColor
+
+    function syncNewsFontToBaseFontChange() {
+        if (root.newsFontSyncInProgress) {
+            return
+        }
+        var newBase = root.baseFontSize
+        var oldBase = root.newsSyncBaseFontSize > 0 ? root.newsSyncBaseFontSize : newBase
+        if (oldBase === newBase) {
+            root.newsSyncBaseFontSize = newBase
+            return
+        }
+        var currentNews = root.clampInt(root.newsFontSize, Math.max(10, oldBase + 1), 10, 42)
+        var shiftedNews = root.clampInt(currentNews + (newBase - oldBase), Math.max(10, newBase + 1), 10, 42)
+        root.newsFontSyncInProgress = true
+        root.newsFontSize = String(shiftedNews)
+        root.newsFontSizeOffset = String(shiftedNews - newBase)
+        root.newsFontSyncInProgress = false
+        root.newsSyncBaseFontSize = newBase
+    }
+
+    function updateNewsFontSizeFromField(value) {
+        root.newsFontSize = value
+        var base = root.baseFontSize
+        var currentNews = root.clampInt(value, Math.max(10, base + 1), 10, 42)
+        root.newsFontSizeOffset = String(currentNews - base)
+    }
 
     function isDesktopApplet() {
         return Plasmoid.formFactor !== PlasmaCore.Types.Horizontal
@@ -220,6 +270,23 @@ PlasmoidItem {
         return true
     }
 
+    function emptyRssData() {
+        return {
+            "updated": "",
+            "feeds": [],
+            "errors": [],
+            "nina": {"items": []},
+            "weather": {"items": []},
+            "prayer": {"items": []},
+            "markets": {
+                "exchange": {"items": []},
+                "indices": {"items": []},
+                "stocks": {"items": []}
+            },
+            "system": {"items": []}
+        }
+    }
+
     function prepareXhr(xhr, purpose) {
         try {
             xhr.timeout = root.requestTimeoutMs
@@ -235,7 +302,87 @@ PlasmoidItem {
             if (purpose === "status") {
                 root.helperStatusMessage = root.t("helperStatusTimeout")
             }
+            if (purpose === "cache" || purpose === "config") {
+                root.initialLoadDone = true
+            }
         }
+    }
+
+    function serverUrlForPort(port) {
+        return "http://127.0.0.1:" + root.clampInt(port, 8765, root.helperPortMin, root.helperPortMax)
+    }
+
+    function helperPortCandidateList(preferredPort) {
+        var out = []
+        var seen = ({})
+        function addCandidate(value) {
+            var p = root.clampInt(value, 0, root.helperPortMin, root.helperPortMax)
+            if (p >= root.helperPortMin && p <= root.helperPortMax && !seen[p]) {
+                out.push(p)
+                seen[p] = true
+            }
+        }
+        addCandidate(preferredPort)
+        addCandidate(root.pendingServerPort)
+        addCandidate(root.clampInt(root.localServerPort, 8765, root.helperPortMin, root.helperPortMax))
+        addCandidate(root.activeServerPort)
+        for (var p = root.helperPortMin; p <= root.helperPortMax; p++) {
+            addCandidate(p)
+        }
+        return out
+    }
+
+    function discoverLocalHelperPort(preferredPort) {
+        if (root.portDiscoveryInProgress) {
+            return
+        }
+        root.portDiscoveryInProgress = true
+        root.probeLocalHelperPort(root.helperPortCandidateList(preferredPort), 0)
+    }
+
+    function probeLocalHelperPort(ports, index) {
+        if (index >= ports.length) {
+            root.portDiscoveryInProgress = false
+            root.helperOk = false
+            root.initialLoadDone = true
+            root.errorText = root.t("cacheUnavailable") + "0"
+            return
+        }
+
+        var port = ports[index]
+        var xhr = new XMLHttpRequest()
+        try {
+            xhr.timeout = 300
+        } catch (e) {
+            // Ignore older QML runtimes without XMLHttpRequest.timeout.
+        }
+        xhr.ontimeout = function() {
+            root.probeLocalHelperPort(ports, index + 1)
+        }
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText || "{}")
+                        if (data && data.ok === true
+                            && typeof data.version === "string"
+                            && /^\d+\.\d+\.\d+$/.test(data.version)
+                            && Number(data.local_server_port) === port) {
+                            root.activeServerPort = port
+                            root.pendingServerPort = 0
+                            root.portDiscoveryInProgress = false
+                            root.loadConfig(false)
+                            return
+                        }
+                    } catch (e) {
+                        // Fall through to next candidate.
+                    }
+                }
+                root.probeLocalHelperPort(ports, index + 1)
+            }
+        }
+        xhr.open("GET", root.serverUrlForPort(port) + "/status?t=" + Date.now())
+        xhr.send()
     }
 
     function isEnglish() {
@@ -584,6 +731,35 @@ PlasmoidItem {
             "separatorHelp": "Controls the divider lines between the main dashboard blocks. Feed dividers inside the news block stay visible for readability.",
             "fontSize": "Font size",
             "fetchInterval": "Fetch interval in minutes",
+            "bootRefreshEnabled": "Run first refresh after login/reboot",
+            "bootRefreshDelay": "Delay after login/reboot",
+            "bootRefreshDelayHelp": "When enabled, Die Lage runs one forced refresh shortly after login/reboot. Default: 120 seconds. Increase this if Wi-Fi, VPN or the network starts slowly. Saving updates the systemd user boot timer for the next login/reboot.",
+            "localServerPort": "Local helper port",
+            "localServerPortHelp": "Port for the local helper on 127.0.0.1. Allowed range: 8765–8775. Change this only if another local service already uses 8765. Save, then restart the local service; the widget scans this range when reconnecting.",
+            "localServerPortActive": "Active port",
+            "localServerPortConfigured": "Configured port",
+            "portRestartRequired": "The helper port was saved, but the running service is still using the old port. Restart the local service so it can bind to the new port.",
+            "activePortShort": "active port:",
+            "restartTerminalFallbackShort": "The local helper is unreachable; use the terminal restart command shown below.",
+            "restartTerminalFallback": "The local helper is currently unreachable. Run this terminal command, then click Retry: systemctl --user restart dielage-local-server.service",
+            "restartLocalService": "Restart local service",
+            "restarting": "Restarting…",
+            "restartLocalServiceDone": "Local service restart requested. The widget will reconnect automatically.",
+            "clearCache": "Clear cache",
+            "clearCacheHelp": "Deletes Die Lage cache files in ~/.cache/die-lage. Settings and API keys are kept. After clearing, use Refresh to rebuild fresh data.",
+            "clearCacheConfirm": "Clear cached Die Lage data now? Settings and API keys are kept.",
+            "clearCacheDone": "Cache cleared. Use Refresh to rebuild fresh data.",
+            "clearCacheWorking": "Clearing cache …",
+            "clearCacheFailed": "Cache could not be cleared. HTTP ",
+            "checkTools": "Check required tools",
+            "toolsChecking": "Checking local tools …",
+            "toolsRequiredOk": "All good! The required local tools are available.",
+            "toolsRequiredFound": "Required tools:",
+            "toolsRequiredMissing": "Missing required tools:",
+            "toolsRecommendedMissing": "Recommended tools not found:",
+            "toolsOptionalFound": "Optional helpers found:",
+            "toolsRequiredHint": "Install the missing required tools and run install.sh again. Optional helpers only improve system, VPN or update detection.",
+            "toolsCheckFailed": "Tool check failed: HTTP ",
             "highlightColor": "Accent / highlight color",
             "highlightHelp": "Enter a hex color such as #2f7d4f, or leave empty.",
             "highlightPlaceholder": "#2f7d4f or leave empty = Plasma color",
@@ -601,7 +777,8 @@ PlasmoidItem {
             "newsLinksHelp": "When disabled, headlines are displayed as plain text and clicks do not open links.",
             "newsFontFamily": "Font family for news",
             "newsFontFamilyHint": "Only used if the font is installed. Leave empty for the normal Plasma font.",
-            "newsFontSize": "News font size (px)",
+            "newsFontSize": "RSS/news font size (px)",
+            "newsFontSizeHelp": "Controls only RSS feed names and headlines. Use the general font size above for the rest of the widget.",
             "preview": "Preview: This is a news line with the selected font.",
             "language": "Language / Sprache",
             "blocks": "Show blocks",
@@ -639,7 +816,7 @@ PlasmoidItem {
             "indicesHelp": "Indices – one line per index: Name|Symbol. Yahoo Finance is the safest default; Twelve Data can be forced below.",
             "stocksHelp": "Stocks – one line per stock: Name|Symbol|Display. Optional display can be a WKN, ISIN or short label.",
             "providerMode": "Market data source",
-            "providerHint": "auto = stocks use keyed sources first; indices use Yahoo first. twelve/finnhub/yahoo force the first source and then fall back. API keys: twelvedata.com/docs and finnhub.io/register. Yahoo fallback needs no key but is less official, because naturally finance data is a licensing swamp.",
+            "providerHint": "Automatic: stocks try API-key providers first; indices try Yahoo first. Choose Twelve Data, Finnhub or Yahoo to prefer one provider; Die Lage still uses fallbacks when a source fails. API keys are optional and stored only locally. Yahoo does not need a key, but is an unofficial fallback.",
             "twelveKey": "Twelve Data API key – optional. Get it from twelvedata.com. Stored locally and used for market data depending on source mode.",
             "finnhubKey": "Finnhub API key – optional. Get it from finnhub.io/register. Stored locally and used as another market-data source.",
             "prayerSettings": "Islamic Prayer Times – location and calculation",
@@ -719,10 +896,12 @@ PlasmoidItem {
             "moveUp": "Move up",
             "moveDown": "Move down",
             "resetOrder": "Reset to default",
-            "resetDefaults": "Reset all settings to defaults",
-            "resetConfirm": "Reset all settings to defaults? Your RSS feeds, weather locations and warning areas will be replaced by the bundled examples. API keys will be cleared. This cannot be undone.",
-            "resetConfirmYes": "Reset",
+            "resetDefaults": "Reset settings, sources and blocks",
+            "resetConfirm": "Reset all settings, sources and block choices to the bundled defaults? RSS feeds, weather locations, warning areas, market lists and display options will be replaced. API keys will be cleared. This cannot be undone.",
+            "resetConfirmYes": "Yes, reset",
             "resetConfirmNo": "Cancel",
+            "resetDefaultsDone": "Settings were reset to defaults. A refresh has been requested.",
+            "secondsUnit": "seconds",
             "aboutSection": "Status & info",
             "aboutStoryTitle": "About Die Lage",
             "aboutStoryText": "Die Lage grew out of a journalist's daily routine: keeping current news, weather, warnings, markets and system context in view without constantly jumping between apps and feeds. I like numbers, statistics and dashboards, but I also need them to stay quiet enough for real work. Islamic prayer times are included because I lived for many years in Islamic countries, where they are a useful part of everyday orientation. I built this first as a working tool for myself; if it helps others too, I am happy to share it. Suggestions for useful additional information blocks are welcome.",
@@ -731,19 +910,19 @@ PlasmoidItem {
             "contactAuthor": "Contact author",
             "donate": "Donate",
             "checkHelperStatus": "Check service status",
-            "helperServiceHelpOk": "The local background service answers status requests and should fetch data normally. If the widget stops updating, restart the user service in a terminal.",
+            "helperServiceHelpOk": "The local background services are reachable and should fetch data normally. If updates stop, click the restart button below. Terminal fallback: systemctl --user restart dielage-local-server.service",
             "helperServiceHelpMissing": "The local background service is not reachable. The widget can still show cached data, but refresh, settings sync and new data need this service. Use the repair commands below; if systemd says the unit was not found, run install.sh from the full release zip again.",
             "helperServiceCommands": "Terminal commands:\nsystemctl --user daemon-reload\nsystemctl --user enable --now dielage-local-server.service\nsystemctl --user enable --now dielage-cache.timer dielage-cache-boot.timer\nsystemctl --user restart dielage-local-server.service\nsystemctl --user start dielage-cache.service\nsystemctl --user status dielage-local-server.service --no-pager\nsystemctl --user status dielage-cache.timer --no-pager\njournalctl --user -u dielage-local-server.service -n 80 --no-pager",
             "helperStatusChecking": "Checking service status …",
-            "helperStatusOkChecked": "Service answered successfully. Version:",
-            "helperStatusMissingChecked": "Service did not answer. Repair help is shown below.",
-            "helperStatusFailed": "Service status check failed: HTTP ",
-            "helperStatusTimeout": "Service did not answer before the timeout. Repair help is shown below.",
+            "helperStatusOkChecked": "All good! The local background services are running. Version:",
+            "helperStatusMissingChecked": "The local background service did not answer. Repair commands are shown below.",
+            "helperStatusFailed": "Background-service status check failed: HTTP ",
+            "helperStatusTimeout": "The local background service did not answer before the timeout. Repair commands are shown below.",
             "aboutHelperOk": "Local helper service: running",
             "aboutHelperMissing": "Local helper service: not reachable",
             "helperMissingTitle": "Setup needed",
             "helperMissingBody": "This widget needs a small local background service that fetches RSS feeds and other data in the background. If you installed the widget through the KDE Store, only the visible Plasma package is present. The local helper must be installed once from the full installer ZIP.",
-            "helperMissingHint": "Click Download installer ZIP, save it to Downloads, unpack it, run the commands below, then click Retry. The helper scripts and systemd user units are already included in the ZIP; no root password is needed because the service runs as a normal systemd user service.",
+            "helperMissingHint": "Click Download installer ZIP, save it to Downloads, unpack it, run the commands below, then click Retry. The ZIP unpacks to die-lage-latest and contains the helper scripts plus systemd user units. No root password is needed because the service runs as a normal systemd user service.",
             "downloadInstallerZip": "Download installer ZIP",
             "uninstallTitle": "Complete removal",
             "uninstallText": "Plasma can remove the visible widget, but not reliably the local helper scripts, cache timer and systemd user units. Use these commands for a clean uninstall.",
@@ -786,6 +965,35 @@ PlasmoidItem {
             "separatorHelp": "Steuert die Linien zwischen den großen Dashboard-Blöcken. Trennlinien innerhalb der Nachrichten bleiben für die Lesbarkeit erhalten.",
             "fontSize": "Schriftgröße",
             "fetchInterval": "Abruf-Intervall in Minuten",
+            "bootRefreshEnabled": "Erste Aktualisierung nach Login/Neustart ausführen",
+            "bootRefreshDelay": "Verzögerung nach Login/Neustart",
+            "bootRefreshDelayHelp": "Wenn aktiv, führt Die Lage kurz nach Login/Neustart einen erzwungenen Datenabruf aus. Standard: 120 Sekunden. Erhöhen Sie den Wert, wenn WLAN, VPN oder Netzwerk langsam starten. Speichern aktualisiert den systemd-User-Boot-Timer für den nächsten Login/Neustart.",
+            "localServerPort": "Lokaler Helper-Port",
+            "localServerPortHelp": "Port des lokalen Helpers auf 127.0.0.1. Erlaubter Bereich: 8765–8775. Nur ändern, wenn ein anderer lokaler Dienst bereits 8765 nutzt. Speichern, dann den lokalen Dienst neu starten; das Widget sucht diesen Bereich beim erneuten Verbinden ab.",
+            "localServerPortActive": "Aktiver Port",
+            "localServerPortConfigured": "Konfigurierter Port",
+            "portRestartRequired": "Der Helper-Port wurde gespeichert, aber der laufende Dienst nutzt noch den alten Port. Starten Sie den lokalen Dienst neu, damit er den neuen Port nutzt.",
+            "activePortShort": "aktiver Port:",
+            "restartTerminalFallbackShort": "Der lokale Helper ist nicht erreichbar; verwenden Sie den unten angezeigten Terminal-Befehl.",
+            "restartTerminalFallback": "Der lokale Helper ist derzeit nicht erreichbar. Führen Sie diesen Terminal-Befehl aus und klicken Sie danach auf Erneut verbinden: systemctl --user restart dielage-local-server.service",
+            "restartLocalService": "Lokalen Dienst neu starten",
+            "restarting": "Neustart läuft …",
+            "restartLocalServiceDone": "Neustart des lokalen Dienstes angefordert. Das Widget verbindet sich automatisch neu.",
+            "clearCache": "Cache löschen",
+            "clearCacheHelp": "Löscht nur Die-Lage-Cache-Dateien in ~/.cache/die-lage. Einstellungen und API-Keys bleiben erhalten. Danach Aktualisieren verwenden, um frische Daten aufzubauen.",
+            "clearCacheConfirm": "Zwischengespeicherte Die-Lage-Daten jetzt löschen? Einstellungen und API-Keys bleiben erhalten.",
+            "clearCacheDone": "Cache gelöscht. Mit Aktualisieren werden frische Daten aufgebaut.",
+            "clearCacheWorking": "Cache wird gelöscht …",
+            "clearCacheFailed": "Cache konnte nicht gelöscht werden. HTTP ",
+            "checkTools": "Benötigte Werkzeuge prüfen",
+            "toolsChecking": "Lokale Werkzeuge werden geprüft …",
+            "toolsRequiredOk": "Alles gut! Die notwendigen lokalen Werkzeuge sind vorhanden.",
+            "toolsRequiredFound": "Notwendige Werkzeuge:",
+            "toolsRequiredMissing": "Es fehlen notwendige Werkzeuge:",
+            "toolsRecommendedMissing": "Empfohlene Werkzeuge nicht gefunden:",
+            "toolsOptionalFound": "Optionale Helfer gefunden:",
+            "toolsRequiredHint": "Installieren Sie fehlende notwendige Werkzeuge und führen Sie install.sh erneut aus. Optionale Helfer verbessern nur System-, VPN- oder Update-Erkennung.",
+            "toolsCheckFailed": "Werkzeugprüfung fehlgeschlagen: HTTP ",
             "highlightColor": "Akzentfarbe / Highlight-Farbe",
             "highlightHelp": "Bitte eine Hex-Farbe wie #2f7d4f eintragen, oder leer lassen.",
             "highlightPlaceholder": "#2f7d4f oder leer = Plasma-Farbe",
@@ -803,7 +1011,8 @@ PlasmoidItem {
             "newsLinksHelp": "Wenn deaktiviert, werden Überschriften nur als Text angezeigt und Links nicht geöffnet.",
             "newsFontFamily": "Schriftart für Nachrichten",
             "newsFontFamilyHint": "Wird nur genutzt, wenn die Schrift installiert ist. Leer lassen = normale Plasma-Schrift.",
-            "newsFontSize": "Nachrichten-Schriftgröße (px)",
+            "newsFontSize": "RSS-/Nachrichten-Schriftgröße (px)",
+            "newsFontSizeHelp": "Ändert nur RSS-Quellen und Überschriften. Die allgemeine Schriftgröße oben steuert den Rest des Widgets.",
             "preview": "Vorschau: Dies ist eine Nachrichtenzeile mit der gewählten Schrift.",
             "language": "Sprache / Language",
             "blocks": "Blöcke anzeigen",
@@ -841,7 +1050,7 @@ PlasmoidItem {
             "indicesHelp": "Indizes – eine Zeile pro Index: Name|Symbol. Yahoo Finance ist der sichere Standard; Twelve Data kann unten erzwungen werden.",
             "stocksHelp": "Aktien – eine Zeile pro Aktie: Name|Symbol|Anzeige. Anzeige kann WKN, ISIN oder Kurzname sein.",
             "providerMode": "Marktdaten-Quelle",
-            "providerHint": "auto = Aktien nutzen Quellen mit API-Key zuerst; Indizes nutzen Yahoo zuerst. twelve/finnhub/yahoo erzwingen die erste Quelle, danach Fallback. API-Keys: twelvedata.com/docs und finnhub.io/register. Yahoo-Fallback braucht keinen Key, ist aber weniger offiziell, weil Finanzdaten offenbar ein Lizenz-Sumpf sein müssen.",
+            "providerHint": "Automatisch: Aktien versuchen zuerst Anbieter mit API-Key; Indizes versuchen zuerst Yahoo. Mit Twelve Data, Finnhub oder Yahoo bevorzugen Sie einen Anbieter; Die Lage nutzt bei Fehlern weiterhin Fallbacks. API-Keys sind optional und bleiben lokal gespeichert. Yahoo benötigt keinen Key, ist aber ein inoffizieller Fallback.",
             "twelveKey": "Twelve Data API-Key – optional. Erhältlich über twelvedata.com. Wird lokal gespeichert und je nach Quellenmodus für Marktdaten genutzt.",
             "finnhubKey": "Finnhub API-Key – optional. Erhältlich über finnhub.io/register. Wird lokal gespeichert und als weitere Marktdaten-Quelle genutzt.",
             "prayerSettings": "Islamische Gebetszeiten – Ort und Berechnung",
@@ -921,10 +1130,12 @@ PlasmoidItem {
             "moveUp": "Nach oben",
             "moveDown": "Nach unten",
             "resetOrder": "Standardreihenfolge wiederherstellen",
-            "resetDefaults": "Alle Einstellungen auf Standard zurücksetzen",
-            "resetConfirm": "Alle Einstellungen wirklich auf Standard zurücksetzen? RSS-Feeds, Wetterorte und Warngebiete werden durch die mitgelieferten Beispiele ersetzt. API-Keys werden gelöscht. Dies kann nicht rückgängig gemacht werden.",
-            "resetConfirmYes": "Zurücksetzen",
+            "resetDefaults": "Einstellungen, Quellen und Blöcke zurücksetzen",
+            "resetConfirm": "Alle Einstellungen, Quellen und Blockauswahlen wirklich auf die mitgelieferten Standards zurücksetzen? RSS-Feeds, Wetterorte, Warngebiete, Marktlisten und Darstellungsoptionen werden ersetzt. API-Keys werden gelöscht. Dies kann nicht rückgängig gemacht werden.",
+            "resetConfirmYes": "Ja, zurücksetzen",
             "resetConfirmNo": "Abbrechen",
+            "resetDefaultsDone": "Einstellungen wurden auf Standard zurückgesetzt. Eine Aktualisierung wurde angefordert.",
+            "secondsUnit": "Sekunden",
             "aboutSection": "Status & Info",
             "aboutStoryTitle": "Über Die Lage",
             "aboutStoryText": "Die Lage ist aus meinem journalistischen Alltag entstanden: aktuelle Nachrichten, Wetter, Warnmeldungen, Märkte und Systemkontext im Blick behalten, ohne ständig zwischen Apps und Feeds hin und her zu springen. Ich mag Zahlen, Statistiken und Dashboards, aber sie sollen leise genug bleiben, damit man trotzdem arbeiten kann. Die islamischen Gebetszeiten sind enthalten, weil ich viele Jahre in islamisch geprägten Ländern gelebt habe, wo sie im Alltag eine hilfreiche Orientierung geben. Gebaut habe ich das Widget zuerst für mich selbst; wenn es auch anderen hilft, teile ich es gern. Ideen für weitere sinnvolle Infoblöcke sind willkommen.",
@@ -933,19 +1144,19 @@ PlasmoidItem {
             "contactAuthor": "Kontakt zum Autor",
             "donate": "Spenden",
             "checkHelperStatus": "Dienststatus prüfen",
-            "helperServiceHelpOk": "Der lokale Hintergrunddienst antwortet auf Statusabfragen und sollte Daten normal abrufen. Falls das Widget nicht mehr aktualisiert, starten Sie den User-Dienst im Terminal neu.",
+            "helperServiceHelpOk": "Die lokalen Hintergrunddienste sind erreichbar und sollten Daten normal abrufen. Falls Aktualisierungen ausbleiben, klicken Sie unten auf Lokalen Dienst neu starten. Terminal-Variante: systemctl --user restart dielage-local-server.service",
             "helperServiceHelpMissing": "Der lokale Hintergrunddienst ist nicht erreichbar. Das Widget kann eventuell noch alte Cache-Daten anzeigen, aber Aktualisierung, Einstellungsabgleich und neue Daten brauchen diesen Dienst. Verwenden Sie die Reparaturbefehle unten; wenn systemd meldet, dass die Unit nicht gefunden wurde, führen Sie install.sh aus dem vollständigen Release-ZIP erneut aus.",
             "helperServiceCommands": "Terminalbefehle:\nsystemctl --user daemon-reload\nsystemctl --user enable --now dielage-local-server.service\nsystemctl --user enable --now dielage-cache.timer dielage-cache-boot.timer\nsystemctl --user restart dielage-local-server.service\nsystemctl --user start dielage-cache.service\nsystemctl --user status dielage-local-server.service --no-pager\nsystemctl --user status dielage-cache.timer --no-pager\njournalctl --user -u dielage-local-server.service -n 80 --no-pager",
             "helperStatusChecking": "Dienststatus wird geprüft …",
-            "helperStatusOkChecked": "Dienst hat erfolgreich geantwortet. Version:",
-            "helperStatusMissingChecked": "Dienst hat nicht geantwortet. Reparaturhilfe wird direkt darunter angezeigt.",
-            "helperStatusFailed": "Dienststatusprüfung fehlgeschlagen: HTTP ",
-            "helperStatusTimeout": "Dienst hat vor Ablauf des Timeouts nicht geantwortet. Reparaturhilfe wird direkt darunter angezeigt.",
+            "helperStatusOkChecked": "Alles gut! Die lokalen Hintergrunddienste laufen. Version:",
+            "helperStatusMissingChecked": "Der lokale Hintergrunddienst hat nicht geantwortet. Die Reparaturbefehle stehen direkt darunter.",
+            "helperStatusFailed": "Prüfung der Hintergrunddienste fehlgeschlagen: HTTP ",
+            "helperStatusTimeout": "Der lokale Hintergrunddienst hat vor Ablauf des Timeouts nicht geantwortet. Die Reparaturbefehle stehen direkt darunter.",
             "aboutHelperOk": "Lokaler Hintergrunddienst: läuft",
             "aboutHelperMissing": "Lokaler Hintergrunddienst: nicht erreichbar",
             "helperMissingTitle": "Einrichtung erforderlich",
             "helperMissingBody": "Dieses Widget braucht einen kleinen lokalen Hintergrunddienst, der RSS-Feeds und weitere Daten im Hintergrund abruft. Wenn Sie das Widget über den KDE Store installiert haben, ist nur das sichtbare Plasma-Paket vorhanden. Der lokale Helper muss einmalig aus dem vollständigen Installer-ZIP installiert werden.",
-            "helperMissingHint": "Klicken Sie auf Installer-ZIP herunterladen, speichern Sie die Datei im Ordner Downloads, entpacken Sie sie, führen Sie die unten stehenden Befehle aus und klicken Sie danach auf Erneut verbinden. Die Helper-Skripte und systemd-User-Units sind bereits im ZIP enthalten; kein Root-Passwort ist nötig, weil der Dienst als normaler systemd-User-Service läuft.",
+            "helperMissingHint": "Klicken Sie auf Installer-ZIP herunterladen, speichern Sie die Datei im Ordner Downloads, entpacken Sie sie, führen Sie die unten stehenden Befehle aus und klicken Sie danach auf Erneut verbinden. Das ZIP entpackt sich nach die-lage-latest und enthält Helper-Skripte sowie systemd-User-Units. Kein Root-Passwort ist nötig, weil der Dienst als normaler systemd-User-Service läuft.",
             "downloadInstallerZip": "Installer-ZIP herunterladen",
             "uninstallTitle": "Komplett deinstallieren",
             "uninstallText": "Plasma kann das sichtbare Widget entfernen, aber nicht zuverlässig lokale Helper-Skripte, Cache-Timer und systemd-User-Units. Für eine saubere Deinstallation verwenden Sie diese Befehle.",
@@ -1036,6 +1247,7 @@ PlasmoidItem {
 
     function helperInstallCommands() {
         return "cd ~/Downloads\n"
+            + "rm -rf die-lage-latest\n"
             + "unzip -o die-lage-latest.zip\n"
             + "cd die-lage-latest\n"
             + "chmod +x install.sh uninstall.sh emergency-clean-dielage.sh\n"
@@ -1702,6 +1914,7 @@ PlasmoidItem {
             root.newsFontFamily = data.ui.news_font_family ? String(data.ui.news_font_family) : ""
             root.newsFontSizeOffset = String(data.ui.news_font_size_offset !== undefined ? data.ui.news_font_size_offset : 1)
             root.newsFontSize = String(data.ui.news_font_size !== undefined ? data.ui.news_font_size : (root.clampInt(root.uiFontSize, 18, 12, 34) + root.clampInt(root.newsFontSizeOffset, 1, -3, 6)))
+            root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = data.ui.panel_mode === "warnings" || data.ui.panel_mode === "ticker" ? "warnings" : "icon"
             root.panelIconMode = root.cleanPanelIconMode(data.ui.panel_icon_mode || "dielage")
             root.panelThemeIcon = root.cleanThemeIconName(data.ui.panel_theme_icon || "view-list-details")
@@ -1727,6 +1940,7 @@ PlasmoidItem {
             root.newsFontFamily = ""
             root.newsFontSizeOffset = "1"
             root.newsFontSize = String(root.clampInt(root.uiFontSize, 18, 12, 34) + 1)
+            root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = "icon"
             root.panelIconMode = "dielage"
             root.panelThemeIcon = "view-list-details"
@@ -1749,6 +1963,7 @@ PlasmoidItem {
             root.newsFontFamily = ""
             root.newsFontSizeOffset = "1"
             root.newsFontSize = String(root.clampInt(root.uiFontSize, 18, 12, 34) + 1)
+            root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = "icon"
             root.panelIconMode = "dielage"
             root.panelThemeIcon = "view-list-details"
@@ -1766,6 +1981,9 @@ PlasmoidItem {
         }
 
         root.fetchIntervalMinutes = String(data.fetch_interval_minutes || 10)
+        root.localServerPort = String(data.local_server_port || 8765)
+        root.bootRefreshEnabled = data.boot_refresh_enabled !== false
+        root.bootRefreshDelaySeconds = String(data.boot_refresh_delay_seconds || 120)
 
         // Block order lives at the top level so older configs that miss it
         // are simply repaired with the default. parseBlockOrder also strips
@@ -1791,7 +2009,7 @@ PlasmoidItem {
 
     function loadCache() {
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr)
+        root.prepareXhr(xhr, "cache")
 
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
@@ -1814,6 +2032,9 @@ PlasmoidItem {
                     // we do not flip helperOk for those.
                     if (xhr.status === 0) {
                         root.helperOk = false
+                        if (!root.portDiscoveryInProgress) {
+                            root.discoverLocalHelperPort()
+                        }
                     }
                 }
                 root.initialLoadDone = true
@@ -1830,9 +2051,9 @@ PlasmoidItem {
         root.loadConfig()
     }
 
-    function loadConfig() {
+    function loadConfig(allowPortDiscovery, afterSuccess) {
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr)
+        root.prepareXhr(xhr, "config")
 
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
@@ -1846,12 +2067,21 @@ PlasmoidItem {
                     } catch (e) {
                         root.errorText = root.t("configError") + e
                     }
-                    // Always load cache after config so language is already set.
-                    root.loadCache()
+                    // Always load cache after config so language is already set,
+                    // unless a caller needs to chain a refresh first (reset flow).
+                    if (typeof afterSuccess === "function") {
+                        afterSuccess()
+                    } else {
+                        root.loadCache()
+                    }
                 } else {
                     root.errorText = root.t("configUnavailable") + xhr.status
                     if (xhr.status === 0) {
                         root.helperOk = false
+                        if (allowPortDiscovery !== false && !root.portDiscoveryInProgress) {
+                            root.discoverLocalHelperPort()
+                            return
+                        }
                     }
                     root.loadCache()
                 }
@@ -1877,6 +2107,9 @@ PlasmoidItem {
         var clampedPanelPopupWidth = root.panelPopupWidthPx()
         var panelPopupWidthChanged = clampedPanelPopupWidth !== root.savedPanelPopupWidth
         root.panelPopupWidth = String(clampedPanelPopupWidth)
+        var clampedLocalServerPort = root.clampInt(root.localServerPort, 8765, root.helperPortMin, root.helperPortMax)
+        var localServerPortChanged = clampedLocalServerPort !== root.activeServerPort
+        root.localServerPort = String(clampedLocalServerPort)
 
         var payload = {
             "feeds": root.parseConfigText(root.feedsText, "feed"),
@@ -1894,6 +2127,9 @@ PlasmoidItem {
                 "finnhub_api_key": root.finnhubApiKey.trim()
             },
             "fetch_interval_minutes": root.clampInt(root.fetchIntervalMinutes, 10, 1, 1440),
+            "local_server_port": clampedLocalServerPort,
+            "boot_refresh_enabled": root.bootRefreshEnabled,
+            "boot_refresh_delay_seconds": root.clampInt(root.bootRefreshDelaySeconds, 120, 10, 1800),
             "system": {
                 "show_info": root.showSystemInfo,
                 "show_network": root.showSystemNetwork,
@@ -1959,6 +2195,17 @@ PlasmoidItem {
                     if (panelPopupWidthChanged && !root.isDesktopApplet()) {
                         root.expanded = false
                     }
+                    var serverRestartRequired = localServerPortChanged
+                    try {
+                        var saveResp = JSON.parse(xhr.responseText || "{}")
+                        serverRestartRequired = serverRestartRequired || saveResp.server_restart_required === true
+                    } catch (e) {
+                        // Older helper response; use local comparison.
+                    }
+                    if (serverRestartRequired) {
+                        root.errorText = root.t("portRestartRequired")
+                        return
+                    }
                     root.triggerRefresh()
                 } else {
                     root.errorText = root.t("saveFailed") + xhr.status
@@ -2004,6 +2251,9 @@ PlasmoidItem {
                     root.errorText = root.t("refreshFailed") + xhr.status
                     if (xhr.status === 0) {
                         root.helperOk = false
+                        if (!root.portDiscoveryInProgress) {
+                            root.discoverLocalHelperPort()
+                        }
                     }
                 }
             }
@@ -2032,6 +2282,8 @@ PlasmoidItem {
     // helper-missing screen.
     function resetToDefaults() {
         root.saving = true
+        root.resetConfirmVisible = false
+        root.helperStatusMessage = ""
 
         var xhr = new XMLHttpRequest()
         root.prepareXhr(xhr)
@@ -2039,11 +2291,13 @@ PlasmoidItem {
             if (xhr.readyState === 4) {
                 root.saving = false
                 if (xhr.status === 200) {
-                    // Re-load via the helper so we see the freshly written
-                    // defaults; calling loadConfig() also triggers loadCache().
-                    root.loadConfig()
+                    root.errorText = ""
+                    root.helperStatusMessage = root.t("resetDefaultsDone")
+                    // Re-read the default config first, then rebuild cache once.
+                    root.loadConfig(false, function() { root.triggerRefresh() })
                 } else {
                     root.errorText = root.t("saveFailed") + xhr.status
+                    root.helperStatusMessage = ""
                     if (xhr.status === 0) {
                         root.helperOk = false
                     }
@@ -2053,6 +2307,95 @@ PlasmoidItem {
         xhr.open("POST", root.baseUrl + "/reset")
         xhr.setRequestHeader("Content-Type", "application/json")
         xhr.send("{}")
+    }
+
+
+
+    function clearCacheOnly() {
+        root.cacheClearing = true
+        root.helperStatusMessage = ""
+        root.showCacheActionMessage(root.t("clearCacheWorking"), true)
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr)
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                root.cacheClearing = false
+                if (xhr.status === 200) {
+                    root.errorText = ""
+                    root.helperStatusMessage = root.t("clearCacheDone")
+                    root.showCacheActionMessage(root.t("clearCacheDone"), true)
+                    root.rssData = root.emptyRssData()
+                } else {
+                    var failMessage = root.t("clearCacheFailed") + xhr.status
+                    root.errorText = failMessage
+                    root.helperStatusMessage = ""
+                    root.showCacheActionMessage(failMessage, false)
+                    if (xhr.status === 0 && !root.portDiscoveryInProgress) {
+                        root.helperOk = false
+                        root.discoverLocalHelperPort()
+                    }
+                }
+            }
+        }
+        xhr.open("POST", root.baseUrl + "/clear-cache")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send("{}")
+    }
+
+    function restartLocalService() {
+        var preferred = root.clampInt(root.localServerPort, 8765, root.helperPortMin, root.helperPortMax)
+        root.pendingServerPort = preferred
+
+        if (!root.helperOk) {
+            root.helperStatusMessage = root.t("restartTerminalFallback")
+            root.errorText = root.t("restartTerminalFallbackShort")
+            root.discoverLocalHelperPort(preferred)
+            return
+        }
+
+        root.serviceRestarting = true
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr)
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                root.serviceRestarting = false
+                if (xhr.status === 200) {
+                    root.helperOk = false
+                    root.errorText = root.t("restartLocalServiceDone")
+                    restartDiscoveryTimer.restart()
+                } else {
+                    root.errorText = root.t("saveFailed") + xhr.status
+                    root.helperStatusMessage = root.t("restartTerminalFallback")
+                    if (xhr.status === 0) {
+                        root.helperOk = false
+                        root.discoverLocalHelperPort(preferred)
+                    }
+                }
+            }
+        }
+        xhr.open("POST", root.baseUrl + "/restart")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send("{}")
+    }
+
+    Timer {
+        id: restartDiscoveryTimer
+        interval: 1800
+        repeat: false
+        onTriggered: root.discoverLocalHelperPort(root.pendingServerPort)
+    }
+
+    Timer {
+        id: cacheActionMessageTimer
+        interval: 60000
+        repeat: false
+        onTriggered: root.cacheActionMessage = ""
+    }
+
+    function showCacheActionMessage(message, ok) {
+        root.cacheActionMessage = message
+        root.cacheActionOk = ok
+        cacheActionMessageTimer.restart()
     }
 
     function checkHelperStatus() {
@@ -2067,18 +2410,21 @@ PlasmoidItem {
                 root.helperStatusChecking = false
 
                 if (xhr.status === 200) {
-                    var versionText = ""
+                    var details = ""
                     try {
                         var data = JSON.parse(xhr.responseText)
                         if (data && data.version) {
-                            versionText = " " + data.version
+                            details = " " + data.version
+                        }
+                        if (data && data.local_server_port) {
+                            details += " · " + root.t("activePortShort") + " " + data.local_server_port
                         }
                     } catch (e) {
-                        versionText = ""
+                        details = ""
                     }
                     root.helperOk = true
                     root.errorText = ""
-                    root.helperStatusMessage = root.t("helperStatusOkChecked") + versionText
+                    root.helperStatusMessage = root.t("helperStatusOkChecked") + details
                 } else {
                     root.helperOk = false
                     root.helperStatusMessage = root.t("helperStatusMissingChecked") + " (HTTP " + xhr.status + ")"
@@ -2088,6 +2434,83 @@ PlasmoidItem {
         }
 
         xhr.open("GET", root.baseUrl + "/status?t=" + Date.now())
+        xhr.send()
+    }
+
+    function toolNames(items, installedOnly) {
+        var out = []
+        for (var i = 0; i < (items || []).length; i++) {
+            var item = items[i] || {}
+            if (installedOnly && item.installed !== true) {
+                continue
+            }
+            if (!installedOnly && item.installed === true) {
+                continue
+            }
+            var label = String(item.label || item.id || "").trim()
+            if (label.length > 0) {
+                out.push(label)
+            }
+        }
+        return out
+    }
+
+    function checkRequiredTools() {
+        root.toolsStatusChecking = true
+        root.toolsStatusOk = true
+        root.toolsStatusMessage = root.t("toolsChecking")
+
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr, "status")
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                root.toolsStatusChecking = false
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText || "{}")
+                        var required = data.required || []
+                        var recommended = data.recommended || []
+                        var optional = data.optional || []
+                        var missingRequired = root.toolNames(required, false)
+                        var missingRecommended = root.toolNames(recommended, false)
+                        var requiredInstalled = root.toolNames(required, true)
+                        var optionalInstalled = root.toolNames(optional, true)
+
+                        if (missingRequired.length === 0) {
+                            var msg = root.t("toolsRequiredOk")
+                            if (requiredInstalled.length > 0) {
+                                msg += "\n" + root.t("toolsRequiredFound") + " " + requiredInstalled.join(", ")
+                            }
+                            if (missingRecommended.length > 0) {
+                                msg += "\n" + root.t("toolsRecommendedMissing") + " " + missingRecommended.join(", ")
+                            }
+                            if (optionalInstalled.length > 0) {
+                                msg += "\n" + root.t("toolsOptionalFound") + " " + optionalInstalled.slice(0, 10).join(", ")
+                                if (optionalInstalled.length > 10) {
+                                    msg += " +" + String(optionalInstalled.length - 10)
+                                }
+                            }
+                            root.toolsStatusOk = true
+                            root.toolsStatusMessage = msg
+                        } else {
+                            root.toolsStatusOk = false
+                            root.toolsStatusMessage = root.t("toolsRequiredMissing") + " " + missingRequired.join(", ") + "\n" + root.t("toolsRequiredHint")
+                        }
+                    } catch (e) {
+                        root.toolsStatusOk = false
+                        root.toolsStatusMessage = root.t("toolsCheckFailed") + "parse"
+                    }
+                } else {
+                    root.toolsStatusOk = false
+                    root.toolsStatusMessage = root.t("toolsCheckFailed") + xhr.status
+                    if (xhr.status === 0 && !root.portDiscoveryInProgress) {
+                        root.helperOk = false
+                        root.discoverLocalHelperPort()
+                    }
+                }
+            }
+        }
+        xhr.open("GET", root.baseUrl + "/tools?t=" + Date.now())
         xhr.send()
     }
 
@@ -2128,7 +2551,7 @@ PlasmoidItem {
     // "icon" (local SVG icon + native Plasma tooltip + warning badge) and
     // "warnings" (a tiny status indicator focused only on warnings).
     // The old rotating ticker was removed because panel text gets clipped
-    // too aggressively in real-world panel sizes. Naturally.
+    // too aggressively in real-world panel sizes.
     compactRepresentation: Component {
         MouseArea {
             id: compactRoot
@@ -2649,31 +3072,29 @@ PlasmoidItem {
                                     font.pixelSize: root.sectionSize
                                 }
 
-                                RowLayout {
+                                ColumnLayout {
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
-                                    spacing: Kirigami.Units.largeSpacing
+                                    spacing: Kirigami.Units.smallSpacing
 
-                                    ColumnLayout {
+                                    PlasmaComponents3.Label {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
-                                        spacing: Kirigami.Units.smallSpacing
+                                        text: root.t("separators")
+                                        font.pixelSize: root.smallSize
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
 
-                                        PlasmaComponents3.Label {
-                                            text: root.t("separators")
-                                            font.pixelSize: root.smallSize
-                                        }
-
-                                        QQC2.ComboBox {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: 0
-                                            Layout.maximumWidth: 360
-                                            model: [root.t("separatorSubtle"), root.t("separatorStrong"), root.t("separatorNone")]
-                                            currentIndex: root.cleanSeparatorStyle(root.separatorStyle) === "strong" ? 1 : (root.cleanSeparatorStyle(root.separatorStyle) === "none" ? 2 : 0)
-                                            font.pixelSize: root.smallSize
-                                            onActivated: function(index) {
-                                                root.separatorStyle = index === 1 ? "strong" : (index === 2 ? "none" : "subtle")
-                                            }
+                                    QQC2.ComboBox {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        Layout.maximumWidth: 360
+                                        model: [root.t("separatorSubtle"), root.t("separatorStrong"), root.t("separatorNone")]
+                                        currentIndex: root.cleanSeparatorStyle(root.separatorStyle) === "strong" ? 1 : (root.cleanSeparatorStyle(root.separatorStyle) === "none" ? 2 : 0)
+                                        font.pixelSize: root.smallSize
+                                        onActivated: function(index) {
+                                            root.separatorStyle = index === 1 ? "strong" : (index === 2 ? "none" : "subtle")
                                         }
                                     }
 
@@ -2733,6 +3154,39 @@ PlasmoidItem {
                                         }
                                     }
                                 }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    PlasmaComponents3.Label {
+                                        text: root.t("newsFontSize")
+                                        font.pixelSize: root.smallSize
+                                    }
+
+                                    QQC2.TextField {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        Layout.maximumWidth: 260
+                                        text: root.newsFontSize
+                                        font.pixelSize: root.smallSize
+                                        placeholderText: "19"
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        onTextChanged: root.updateNewsFontSizeFromField(text)
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("newsFontSizeHelp")
+                                        opacity: 0.72
+                                        font.pixelSize: root.smallSize
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
 
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -3148,22 +3602,6 @@ PlasmoidItem {
                                         font.pixelSize: root.smallSize
                                         wrapMode: Text.WordWrap
                                         elide: Text.ElideNone
-                                    }
-
-                                    PlasmaComponents3.Label {
-                                        text: root.t("newsFontSize")
-                                        font.pixelSize: root.smallSize
-                                    }
-
-                                    QQC2.TextField {
-                                        Layout.fillWidth: true
-                                        Layout.minimumWidth: 0
-                                        Layout.preferredWidth: 180
-                                        text: root.newsFontSize
-                                        font.pixelSize: root.smallSize
-                                        placeholderText: "19"
-                                        inputMethodHints: Qt.ImhDigitsOnly
-                                        onTextChanged: root.newsFontSize = text
                                     }
                                 }
 
@@ -3936,6 +4374,116 @@ PlasmoidItem {
                                     elide: Text.ElideNone
                                 }
 
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    QQC2.CheckBox {
+                                        text: root.t("bootRefreshEnabled")
+                                        checked: root.bootRefreshEnabled
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onToggled: root.bootRefreshEnabled = checked
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("bootRefreshDelay")
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        opacity: root.bootRefreshEnabled ? 1.0 : 0.55
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        spacing: Kirigami.Units.smallSpacing
+
+                                        QQC2.TextField {
+                                            Layout.preferredWidth: 150
+                                            Layout.maximumWidth: 190
+                                            text: root.bootRefreshDelaySeconds
+                                            font.pixelSize: Math.max(9, root.smallSize - 2)
+                                            placeholderText: "120"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            enabled: root.bootRefreshEnabled
+                                            onTextChanged: root.bootRefreshDelaySeconds = text
+                                        }
+
+                                        PlasmaComponents3.Label {
+                                            text: root.t("secondsUnit")
+                                            opacity: root.bootRefreshEnabled ? 0.75 : 0.45
+                                            font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("bootRefreshDelayHelp")
+                                        opacity: 0.72
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
+
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("localServerPort")
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        spacing: Kirigami.Units.smallSpacing
+
+                                        QQC2.TextField {
+                                            Layout.preferredWidth: 150
+                                            Layout.maximumWidth: 190
+                                            text: root.localServerPort
+                                            font.pixelSize: Math.max(9, root.smallSize - 2)
+                                            placeholderText: "8765"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            onTextChanged: root.localServerPort = text
+                                        }
+
+                                        PlasmaComponents3.Label {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("localServerPortConfigured") + ": " + root.localServerPort + " · " + root.t("localServerPortActive") + ": " + root.activeServerPort
+                                            color: root.clampInt(root.localServerPort, 8765, root.helperPortMin, root.helperPortMax) === root.activeServerPort ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                            font.pixelSize: Math.max(9, root.smallSize - 2)
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("localServerPortHelp")
+                                        opacity: 0.72
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
                                 QQC2.ScrollView {
                                     id: helperCommandsScroll
                                     visible: !root.helperOk
@@ -3971,10 +4519,34 @@ PlasmoidItem {
                                     }
 
                                     QQC2.Button {
-                                        text: root.t("resetDefaults")
-                                        icon.name: "edit-clear-history"
+                                        text: root.serviceRestarting ? root.t("restarting") : root.t("restartLocalService")
+                                        icon.name: "system-reboot"
+                                        enabled: !root.serviceRestarting
                                         font.pixelSize: Math.max(9, root.smallSize - 2)
-                                        onClicked: resetConfirmDialog.open()
+                                        onClicked: root.restartLocalService()
+                                    }
+
+                                    QQC2.Button {
+                                        text: root.cacheClearing ? root.t("loading") : root.t("clearCache")
+                                        icon.name: "edit-clear-history"
+                                        enabled: !root.cacheClearing
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onClicked: root.clearCacheOnly()
+                                    }
+
+                                    QQC2.Button {
+                                        text: root.toolsStatusChecking ? root.t("loading") : root.t("checkTools")
+                                        icon.name: "system-search"
+                                        enabled: !root.toolsStatusChecking && root.helperOk
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onClicked: root.checkRequiredTools()
+                                    }
+
+                                    QQC2.Button {
+                                        text: root.t("resetDefaults")
+                                        icon.name: "edit-clear"
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onClicked: root.resetConfirmVisible = true
                                     }
 
                                     QQC2.Button {
@@ -3989,6 +4561,98 @@ PlasmoidItem {
                                         icon.name: "emblem-favorite"
                                         font.pixelSize: Math.max(9, root.smallSize - 2)
                                         onClicked: root.openExternalUrl("https://www.paypal.me/drissner")
+                                    }
+                                }
+
+                                Rectangle {
+                                    visible: root.cacheActionMessage.length > 0
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: root.cacheActionOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                    border.width: 1
+                                    radius: 6
+                                    opacity: 0.98
+                                    implicitHeight: cacheActionMessageLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                                    PlasmaComponents3.Label {
+                                        id: cacheActionMessageLabel
+                                        anchors.fill: parent
+                                        anchors.margins: Kirigami.Units.largeSpacing
+                                        text: root.cacheActionMessage
+                                        color: root.cacheActionOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                    }
+                                }
+
+                                Rectangle {
+                                    visible: root.toolsStatusMessage.length > 0
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: root.toolsStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                    border.width: 1
+                                    radius: 6
+                                    opacity: 0.98
+                                    implicitHeight: toolsStatusMessageLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                                    PlasmaComponents3.Label {
+                                        id: toolsStatusMessageLabel
+                                        anchors.fill: parent
+                                        anchors.margins: Kirigami.Units.largeSpacing
+                                        text: root.toolsStatusMessage
+                                        color: root.toolsStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                    }
+                                }
+
+                                Rectangle {
+                                    visible: root.resetConfirmVisible
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: Kirigami.Theme.neutralTextColor
+                                    border.width: 1
+                                    radius: 6
+                                    opacity: 0.98
+                                    implicitHeight: resetConfirmBox.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                                    ColumnLayout {
+                                        id: resetConfirmBox
+                                        anchors.fill: parent
+                                        anchors.margins: Kirigami.Units.largeSpacing
+                                        spacing: Kirigami.Units.smallSpacing
+
+                                        PlasmaComponents3.Label {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("resetConfirm")
+                                            wrapMode: Text.WordWrap
+                                            font.pixelSize: Math.max(9, root.smallSize - 2)
+                                            opacity: 0.88
+                                        }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: Kirigami.Units.smallSpacing
+                                            Item { Layout.fillWidth: true }
+                                            QQC2.Button {
+                                                text: root.t("resetConfirmNo")
+                                                font.pixelSize: Math.max(9, root.smallSize - 2)
+                                                onClicked: root.resetConfirmVisible = false
+                                            }
+                                            QQC2.Button {
+                                                text: root.saving ? root.t("saving") : root.t("resetConfirmYes")
+                                                icon.name: "edit-clear-history"
+                                                enabled: !root.saving
+                                                font.pixelSize: Math.max(9, root.smallSize - 2)
+                                                onClicked: root.resetToDefaults()
+                                            }
+                                        }
                                     }
                                 }
 
@@ -4105,41 +4769,6 @@ PlasmoidItem {
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-
-    // ---- Reset confirmation dialog (v1.51) ----------------------------------
-    // Lives outside the settings Component so it can be opened from anywhere
-    // and survives Loader unloads when the user navigates away.
-    QQC2.Dialog {
-        id: resetConfirmDialog
-        modal: true
-        title: root.t("resetDefaults")
-        standardButtons: QQC2.Dialog.NoButton
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - Kirigami.Units.largeSpacing * 4 : 480, 520)
-
-        contentItem: PlasmaComponents3.Label {
-            text: root.t("resetConfirm")
-            wrapMode: Text.WordWrap
-            font.pixelSize: root.smallSize
-        }
-
-        footer: RowLayout {
-            spacing: Kirigami.Units.smallSpacing
-            QQC2.Button {
-                text: root.t("resetConfirmNo")
-                onClicked: resetConfirmDialog.close()
-            }
-            Item { Layout.fillWidth: true }
-            QQC2.Button {
-                text: root.t("resetConfirmYes")
-                icon.name: "edit-clear-history"
-                onClicked: {
-                    resetConfirmDialog.close()
-                    root.resetToDefaults()
                 }
             }
         }

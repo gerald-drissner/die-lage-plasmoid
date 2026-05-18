@@ -8,6 +8,10 @@ Type=simple
 ExecStart=%h/.local/bin/dielage-server.py
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
 
 [Install]
 WantedBy=default.target

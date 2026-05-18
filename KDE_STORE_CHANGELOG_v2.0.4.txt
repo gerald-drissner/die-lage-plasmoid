@@ -1,0 +1,6 @@
+Version 2.0.4
+
+- Adds a clearly visible RSS/news font-size setting in Darstellung/Appearance.
+- The setting controls only RSS feed names and headlines.
+- Keeps the separate news font-family setting for headline typography.
+- Removes the confusing numeric counter from the cache-clear success message.

@@ -93,6 +93,29 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.0.4" date="2026-05-18">
+      <description>
+        <p>Adds a clearly visible RSS/news font-size setting in Appearance. The setting controls only RSS feed names and headlines, while the general font-size setting controls the rest of the widget.</p>
+        <p xml:lang="de">Ergänzt unter Darstellung eine klar sichtbare RSS-/Nachrichten-Schriftgröße. Die Einstellung steuert nur RSS-Quellen und Überschriften; die allgemeine Schriftgröße steuert den Rest des Widgets.</p>
+      </description>
+    </release>
+    <release version="2.0.2" date="2026-05-18">
+      <description>
+        <p>Fixes cache-clearing feedback and adds a local tool check in Info / Service for required, recommended and optional Linux helper tools.</p>
+        <p xml:lang="de">Korrigiert die Rückmeldung beim Cache-Löschen und ergänzt unter Info / Dienst eine lokale Werkzeugprüfung für notwendige, empfohlene und optionale Linux-Helfer.</p>
+      </description>
+    </release>
+    <release version="2.0.0" date="2026-05-18">
+      <description>
+        <p>Major maintenance release with polished helper-service controls, clearer first-run installation guidance, configurable boot refresh, configurable local helper port, cache clearing, service restart controls, and cleanup of the Info / Dienst settings flow.</p>
+      </description>
+    </release>
+    <release version="1.60.8" date="2026-05-18">
+      <description>
+        <p>Adds a configurable first refresh delay after login/reboot.</p>
+        <p xml:lang="de">Ergänzt eine einstellbare Verzögerung für den ersten Datenabruf nach Login/Neustart und härtet Helper/Cache-Skript mit klareren JSON-Fehlern, konsistenterer Standardkonfiguration, API-Key-Übertragung per Header, optional sichererem XML-Parsing, dnf-Prüfung nur aus dem Cache und gezielterer Plasma-Cache-Bereinigung.</p>
+      </description>
+    </release>
     <release version="1.60.7" date="2026-05-16">
       <description>
         <p>Hardens the helper and cache scripts: clearer JSON errors, default-config consistency, header-based market API authentication, optional safer XML parsing, dnf cache-only update checks and more targeted Plasma cache cleanup.</p>

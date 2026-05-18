@@ -1,54 +1,42 @@
 # Changelog
 
-## v1.60.7
+## v2.0.4
 
-- Hardened `/config` request parsing in the local helper server: invalid or empty JSON now returns clear 400/411 errors instead of a generic 500.
-- The cache script now reads `~/.config/die-lage/default-config.json` as the primary default configuration source, with an inline fallback only for broken installs.
-- Optional `defusedxml` support for RSS/warning XML parsing. If `defusedxml` is installed, it is used automatically; otherwise the script falls back to Python's standard XML parser.
-- Twelve Data and Finnhub API keys are now sent via provider-supported HTTP headers instead of URL query parameters.
-- Fedora/RPM update checks use `dnf --cacheonly check-update` to avoid slow metadata refreshes during normal widget updates.
-- The normal installer and uninstaller now clear only Die-Lage-specific Plasma/QML cache entries. The emergency cleaner still performs a full Plasma cache reset for rare broken-cache cases.
-- Moved two nested QML helper functions out of loop/control blocks for better Qt/QML compatibility.
+RSS typography fix after the 2.0 release.
 
-## v1.60.6
+- Added a clearly visible RSS/news font-size setting near the general font-size control in Darstellung/Appearance.
+- The RSS/news font-size setting controls only RSS feed names and headlines.
+- Kept the separate news font-family setting for users who want a different typeface for headlines.
+- Removed the duplicate, easy-to-miss RSS font-size field from the lower news-font section.
+- Kept the cache-clear success text clean, without the confusing numeric counter.
 
-- Improved the first-run setup screen for KDE Store users.
-- Added a direct download button/link for the full installer ZIP.
-- The setup screen now points to the GitHub project page instead of the personal website.
-- The helper installation instructions now use the stable latest-release ZIP: `die-lage-latest.zip`.
-- Clarified that the KDE Store `.plasmoid` installs only the visible widget, while live data requires the included local Python helper and systemd user services.
+## v2.0.2
 
-## v1.60.5
+Settings/service polish after the 2.0 release.
 
-- Final publishing polish for the first public release.
-- Hardened plain-text rendering for feed/index names.
-- Improved panel popup width state tracking for narrow popup layouts.
-- Added clearer public release text for GitHub and KDE Store.
+- Fixed the Cache löschen button so it no longer opens an unreliable dialog path; it now performs the action directly and shows visible feedback in Info / Dienst.
+- Added a local tool check in Info / Dienst so users can see whether required tools such as Python 3 and systemctl are available.
+- Added a backend /tools endpoint that reports required, recommended and optional helper tools.
+- Extended German and English translations for the new tool-check UI.
+- Kept cache clearing limited to Die-Lage cache files in ~/.cache/die-lage; settings and API keys are not touched.
 
-## v1.60.2
+## v2.0.1
 
-- Market timestamps are context-aware: same-day local values stay compact, while stale or foreign-market values keep useful date/timezone context.
-- Weather details are more compact: zero values for wind, gusts, rain and snow are hidden, while temperatures remain visible.
-- AppStream screenshot metadata points to public screenshot URLs.
+Settings polish and wording cleanup after the 2.0 release.
 
-## v1.58.8
+- Fixed the layout of the section-separator setting in Darstellung/Appearance so the help text no longer overlaps the control.
+- Made cache-clearing feedback visible directly in Info / Dienst.
+- Reworded the market-data source help text in German and English.
+- Rechecked German/English translation parity and removed informal wording from user-facing help text.
 
-- Added bundled Die-Lage SVG icons and separate store assets.
-- Added configurable panel icon handling.
-- Improved KDE Store text and publishing guidance.
+## v2.0.0
 
-## v1.58.5
+Major maintenance release focused on a clean, reliable helper workflow.
 
-- Added upcoming/now highlighting for Islamic prayer times.
-- Improved weather detail ordering and display.
-- Improved configuration handling and collapsible block persistence.
-
-## v1.58.1
-
-- Added scrollable multi-line settings fields.
-- Hardened external news-link handling.
-- Improved local server responses and partial config saves.
-
-## v1.57.0
-
-- Improved spacing, service-status feedback and VPN-status handling.
+- Polished the Info / Dienst settings page with clearer helper-status wording and better restart guidance.
+- Added explicit user-facing controls for boot/login refresh: enable/disable plus configurable delay in seconds.
+- Kept the default boot/login refresh enabled with a conservative 120-second delay for Wi-Fi, VPN and network startup.
+- Kept the local helper port configurable in a safe loopback-only range and made the active/configured port state visible.
+- Added reliable Cache löschen and Lokalen Dienst neu starten flows with clearer feedback and safer fallback instructions.
+- Improved the first-run KDE Store workflow: the stable latest ZIP now extracts to die-lage-latest, matching the copy-paste setup commands.
+- Cleaned up reset/cache QML flows, removed stale dialog code, avoided duplicate cache loads after reset and improved helper restart handling.

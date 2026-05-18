@@ -7,5 +7,9 @@ Wants=network-online.target
 # no-op; enable the .timer instead.
 
 [Service]
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
 Type=oneshot
 ExecStart=%h/.local/bin/dielage-cache.py

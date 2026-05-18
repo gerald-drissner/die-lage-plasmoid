@@ -70,6 +70,9 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
              'show_stocks': True,
              'stocks': []},
  'fetch_interval_minutes': 10,
+ 'local_server_port': 8765,
+ 'boot_refresh_enabled': True,
+ 'boot_refresh_delay_seconds': 120,
  'system': {'show_info': True,
             'show_network': True,
             'show_public_network': False,
@@ -125,8 +128,9 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/1.60.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.4 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
+SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 
 # Only allow http/https in user-supplied URLs. Without this guard, a config
 # pointing at file:// could read local files, and ftp:// or other schemes
@@ -221,6 +225,9 @@ def load_config() -> dict:
     data.setdefault("prayer", copy.deepcopy(DEFAULT_CONFIG["prayer"]))
     data.setdefault("system", copy.deepcopy(DEFAULT_CONFIG["system"]))
     data.setdefault("fetch_interval_minutes", DEFAULT_CONFIG["fetch_interval_minutes"])
+    data.setdefault("local_server_port", DEFAULT_CONFIG.get("local_server_port", 8765))
+    data.setdefault("boot_refresh_enabled", DEFAULT_CONFIG.get("boot_refresh_enabled", True))
+    data.setdefault("boot_refresh_delay_seconds", DEFAULT_CONFIG.get("boot_refresh_delay_seconds", 120))
 
     ui = data.setdefault("ui", {})
     if not isinstance(ui, dict):
@@ -1789,6 +1796,7 @@ def run_command(args: list[str], timeout: float = 3.0) -> tuple[bool, str]:
             text=True,
             timeout=timeout,
             check=False,
+            env=SAFE_SUBPROCESS_ENV,
         )
     except Exception as exc:
         return False, str(exc)
@@ -1964,6 +1972,7 @@ def updates_available() -> tuple[str, str]:
                 text=True,
                 timeout=12,
                 check=False,
+                env=SAFE_SUBPROCESS_ENV,
             )
             if proc.returncode in (0, 2):
                 lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
@@ -1981,6 +1990,7 @@ def updates_available() -> tuple[str, str]:
                 text=True,
                 timeout=8,
                 check=False,
+                env=SAFE_SUBPROCESS_ENV,
             )
             if proc.returncode in (0, 1):
                 lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
@@ -1999,7 +2009,7 @@ def updates_available() -> tuple[str, str]:
                 text=True,
                 timeout=12,
                 check=False,
-                env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
             )
             if proc.returncode == 0:
                 out = proc.stdout or ""
@@ -2021,7 +2031,7 @@ def updates_available() -> tuple[str, str]:
                 text=True,
                 timeout=20,
                 check=False,
-                env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
             )
             if proc.returncode in (0, 100):
                 out = proc.stdout or ""
@@ -2054,7 +2064,7 @@ def updates_available() -> tuple[str, str]:
                 text=True,
                 timeout=20,
                 check=False,
-                env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
             )
             if proc.returncode == 0:
                 out = proc.stdout or ""
@@ -2414,9 +2424,10 @@ def empty_block(name: str) -> dict:
         "location": name,
     }
 
-def build_cache() -> dict:
-    ensure_config()
-    config = load_config()
+def build_cache(config: dict | None = None) -> dict:
+    if config is None:
+        ensure_config()
+        config = load_config()
     old = load_old()
 
     feeds = []
@@ -2487,4 +2498,4 @@ if __name__ == "__main__":
     if cache_is_fresh(config):
         raise SystemExit(0)
 
-    build_cache()
+    build_cache(config)

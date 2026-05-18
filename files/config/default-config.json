@@ -139,6 +139,9 @@
     "show_stocks": true
   },
   "fetch_interval_minutes": 10,
+  "local_server_port": 8765,
+  "boot_refresh_enabled": true,
+  "boot_refresh_delay_seconds": 120,
   "ui": {
     "font_size": 18,
     "highlight_color": "",

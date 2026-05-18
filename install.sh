@@ -73,6 +73,10 @@ distro_pkg() {
         debian:nvidia-utils)  echo "nvidia-driver" ;;
         fedora:nvidia-utils)  echo "akmod-nvidia" ;;
         suse:nvidia-utils)    echo "nvidia-driver-G06" ;;
+        arch:python-defusedxml)   echo "python-defusedxml" ;;
+        debian:python-defusedxml) echo "python3-defusedxml" ;;
+        fedora:python-defusedxml) echo "python3-defusedxml" ;;
+        suse:python-defusedxml)   echo "python3-defusedxml" ;;
         *) echo "" ;;
     esac
 }
@@ -127,6 +131,18 @@ if ! command -v resolvectl >/dev/null 2>&1; then
     missing_tools+=("resolvectl (systemd) – DNS über systemd-resolved; /etc/resolv.conf bleibt Fallback")
 fi
 
+if ! python3 - <<'PYDEFUSED' >/dev/null 2>&1
+import defusedxml.ElementTree
+PYDEFUSED
+then
+    defused_pkg="$(distro_pkg python-defusedxml)"
+    defused_display="${defused_pkg:-python3-defusedxml}"
+    missing_tools+=("defusedxml ($defused_display) – sichere XML/RSS-Verarbeitung")
+    if [ -n "$defused_pkg" ]; then
+        missing_pkgs+=("$defused_pkg")
+    fi
+fi
+
 # checkupdates only exists on Arch. The cache.py also falls back to "pacman -Qu"
 # and to apt/dnf/zypper, so this is purely a polish recommendation for Arch.
 if [ "$FAMILY" = "arch" ] && ! command -v checkupdates >/dev/null 2>&1; then
@@ -154,7 +170,7 @@ if [ "${#missing_tools[@]}" -eq 0 ]; then
     echo "OK: Alle relevanten optionalen Werkzeuge gefunden."
 else
     echo "Hinweis: Einige optionale Werkzeuge fehlen. Das Widget läuft trotzdem,"
-    echo "zeigt aber evtl. weniger Systemdetails."
+    echo "zeigt aber evtl. weniger Systemdetails oder nutzt weniger robuste XML-Verarbeitung."
     for item in "${missing_tools[@]}"; do
         echo "  - $item"
     done
@@ -374,6 +390,9 @@ elif feeds == previous_default_feeds:
     data["feeds"] = default_feeds
 
 data.setdefault("fetch_interval_minutes", 10)
+data.setdefault("local_server_port", 8765)
+data.setdefault("boot_refresh_enabled", True)
+data.setdefault("boot_refresh_delay_seconds", 120)
 data.setdefault("nina_codes", data.get("nina_codes", []))
 
 # Repair block_order: keep known ids in stored order, append missing ones.
@@ -422,9 +441,56 @@ cp "$BASE_DIR/files/systemd/dielage-cache-boot.service" "$HOME/.config/systemd/u
 cp "$BASE_DIR/files/systemd/dielage-cache-boot.timer"   "$HOME/.config/systemd/user/dielage-cache-boot.timer"
 cp "$BASE_DIR/files/systemd/dielage-local-server.service" "$HOME/.config/systemd/user/dielage-local-server.service"
 
+
+# Apply the user-configured boot/login refresh setting to the systemd timer.
+# systemd reads OnStartupSec from the unit file, not from config.json, so the
+# generated timer file must be refreshed during install/upgrade.
+boot_refresh_enabled=$(python3 - <<'PYINSTALLTIMER'
+from pathlib import Path
+import json
+
+config_path = Path.home() / ".config/die-lage/config.json"
+timer_path = Path.home() / ".config/systemd/user/dielage-cache-boot.timer"
+def clamp(value, fallback=120, lo=10, hi=1800):
+    try:
+        n = int(value)
+    except Exception:
+        n = fallback
+    return max(lo, min(hi, n))
+
+try:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        config = {}
+except Exception:
+    config = {}
+
+enabled = bool(config.get("boot_refresh_enabled", True))
+delay = clamp(config.get("boot_refresh_delay_seconds", 120))
+text = f"""[Unit]
+Description=Run initial Die Lage cache refresh after login/reboot
+
+[Timer]
+OnStartupSec={delay}s
+AccuracySec=15s
+Unit=dielage-cache-boot.service
+
+[Install]
+WantedBy=timers.target
+"""
+if not timer_path.exists() or timer_path.read_text(encoding="utf-8") != text:
+    timer_path.write_text(text, encoding="utf-8")
+print("1" if enabled else "0")
+PYINSTALLTIMER
+)
+
 systemctl --user daemon-reload
 systemctl --user enable --now dielage-cache.timer        >/dev/null 2>&1 || true
-systemctl --user enable --now dielage-cache-boot.timer   >/dev/null 2>&1 || true
+if [ "$boot_refresh_enabled" = "1" ]; then
+    systemctl --user enable --now dielage-cache-boot.timer   >/dev/null 2>&1 || true
+else
+    systemctl --user disable --now dielage-cache-boot.timer  >/dev/null 2>&1 || true
+fi
 systemctl --user enable --now dielage-local-server.service >/dev/null 2>&1 || true
 systemctl --user restart dielage-local-server.service    >/dev/null 2>&1 || true
 
