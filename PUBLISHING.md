@@ -1,19 +1,24 @@
-# Publishing Die Lage v2.0.4
+# Publishing Die Lage
 
 ## Build
 
+Run the release check for the current version, for example:
+
 ```bash
-./release-checks-v2.0.4.sh
+./release-checks-v2.0.7.sh
 ```
 
 ## GitHub release assets
 
-- die-lage-2.0.4.plasmoid
-- die-lage-v2.0.4.zip
-- die-lage-latest.zip
+Upload the generated files:
+
+- `die-lage-<version>.plasmoid`
+- `die-lage-v<version>.zip`
+- `die-lage-latest.zip`
+
+Release notes and KDE Store changelog snippets should be used in the release UI, but should not be committed to the source tree.
 
 ## KDE Store
 
-- Main package: `die-lage-2.0.4.plasmoid`
-- Full/helper installer ZIP: `die-lage-v2.0.4.zip`
-- Changelog: paste `KDE_STORE_CHANGELOG_v2.0.4.txt`
+- Main package: `die-lage-<version>.plasmoid`
+- Full/helper installer ZIP: `die-lage-v<version>.zip`

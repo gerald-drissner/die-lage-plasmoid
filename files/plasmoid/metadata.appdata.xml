@@ -93,10 +93,15 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="2.0.4" date="2026-05-18">
+    <release version="2.0.7" date="2026-05-18">
       <description>
-        <p>Adds a clearly visible RSS/news font-size setting in Appearance. The setting controls only RSS feed names and headlines, while the general font-size setting controls the rest of the widget.</p>
-        <p xml:lang="de">Ergänzt unter Darstellung eine klar sichtbare RSS-/Nachrichten-Schriftgröße. Die Einstellung steuert nur RSS-Quellen und Überschriften; die allgemeine Schriftgröße steuert den Rest des Widgets.</p>
+        <p>Clarifies the uninstall instructions shown in Info / Service and keeps the installed uninstaller available after a normal uninstall so users can purge settings and cache later.</p>
+        <p xml:lang="de">Präzisiert die Deinstallationshinweise unter Info / Dienst und lässt den installierten Uninstaller nach einer normalen Deinstallation verfügbar, damit Einstellungen und Cache später noch vollständig entfernt werden können.</p>
+      </description>
+    </release>
+    <release version="2.0.7" date="2026-05-18">
+      <description>
+        <p>Adds market API key checks, makes the Twelve Data URL clickable in settings, and adjusts the default block order so System appears before Markets and News.</p>
       </description>
     </release>
     <release version="2.0.2" date="2026-05-18">

@@ -54,9 +54,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
                        {'name': 'El Paso', 'lat': 31.7619, 'lon': -106.485},
                        {'name': 'Nashville', 'lat': 36.1744, 'lon': -86.76796},
                        {'name': 'Alexandria', 'lat': 31.2156, 'lon': 29.9553}],
- 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'},
-                {'source': 'nina', 'name': 'Hennigsdorf', 'code': '120650136136'},
-                {'source': 'nina', 'name': 'Oberhavel', 'code': '120650000000'}],
+ 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'}],
  'prayer': {'city': 'Berlin', 'country': 'Germany', 'method': 3},
  'markets': {'currencies': ['USD', 'GBP', 'CHF'],
              'indices': [{'name': 'Dow Jones', 'symbol': '^DJI'},
@@ -79,13 +77,13 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
             'show_vpn': True,
             'vpn_label': '',
             'show_updates': True},
- 'ui': {'font_size': 18,
+ 'ui': {'font_size': 16,
         'highlight_color': '',
         'desktop_background_mode': 'default',
         'desktop_background_color': '',
         'news_font_family': '',
-        'news_font_size': 19,
-        'news_font_size_offset': 1,
+        'news_font_size': 16,
+        'news_font_size_offset': 0,
         'language': 'de',
         'panel_mode': 'icon',
         'panel_icon_mode': 'dielage',
@@ -102,7 +100,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'news_links_clickable': True,
         'title_style': 'accent'},
  'blocks': {'weather': True, 'prayer': True, 'nina': True, 'markets': True, 'system': True, 'news': True},
- 'block_order': ['nina', 'weather', 'prayer', 'markets', 'news', 'system'],
+ 'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
@@ -128,7 +126,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.4 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 

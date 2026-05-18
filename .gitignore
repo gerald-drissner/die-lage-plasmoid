@@ -1,0 +1,7 @@
+die-lage-*.zip
+die-lage-*.plasmoid
+GITHUB_RELEASE_NOTES_v*.md
+KDE_STORE_CHANGELOG_v*.txt
+UPDATE_LOCAL_GITHUB_KDE_v*.md
+__pycache__/
+*.pyc

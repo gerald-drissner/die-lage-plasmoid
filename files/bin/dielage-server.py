@@ -13,6 +13,7 @@ import importlib.util
 import threading
 import time
 import urllib.parse
+import urllib.request
 
 HOME = Path.home()
 CACHE_DIR = HOME / ".cache" / "die-lage"
@@ -86,9 +87,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
                        {'name': 'El Paso', 'lat': 31.7619, 'lon': -106.485},
                        {'name': 'Nashville', 'lat': 36.1744, 'lon': -86.76796},
                        {'name': 'Alexandria', 'lat': 31.2156, 'lon': 29.9553}],
- 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'},
-                {'source': 'nina', 'name': 'Hennigsdorf', 'code': '120650136136'},
-                {'source': 'nina', 'name': 'Oberhavel', 'code': '120650000000'}],
+ 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'}],
  'prayer': {'city': 'Berlin', 'country': 'Germany', 'method': 3},
  'markets': {'currencies': ['USD', 'GBP', 'CHF'],
              'indices': [{'name': 'Dow Jones', 'symbol': '^DJI'},
@@ -111,13 +110,13 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
             'show_vpn': True,
             'vpn_label': '',
             'show_updates': True},
- 'ui': {'font_size': 18,
+ 'ui': {'font_size': 16,
         'highlight_color': '',
         'desktop_background_mode': 'default',
         'desktop_background_color': '',
         'news_font_family': '',
-        'news_font_size_offset': 1,
-        'news_font_size': 19,
+        'news_font_size_offset': 0,
+        'news_font_size': 16,
         'language': 'de',
         'panel_mode': 'icon',
         'panel_icon_mode': 'dielage',
@@ -134,7 +133,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'news_links_clickable': True,
         'title_style': 'accent'},
  'blocks': {'weather': True, 'prayer': True, 'nina': True, 'news': True, 'markets': True, 'system': True},
- 'block_order': ['nina', 'weather', 'prayer', 'markets', 'news', 'system'],
+ 'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
@@ -351,6 +350,13 @@ def merge_config(data: dict) -> dict:
     data.setdefault("feeds", copy.deepcopy(defaults["feeds"]))
     data.setdefault("weather_locations", copy.deepcopy(defaults["weather_locations"]))
     data.setdefault("nina_codes", copy.deepcopy(defaults["nina_codes"]))
+    old_default_nina_codes = [
+        {"source": "nina", "name": "Berlin", "code": "110000000000"},
+        {"source": "nina", "name": "Hennigsdorf", "code": "120650136136"},
+        {"source": "nina", "name": "Oberhavel", "code": "120650000000"},
+    ]
+    if data.get("nina_codes") == old_default_nina_codes:
+        data["nina_codes"] = copy.deepcopy(defaults["nina_codes"])
     data.setdefault("prayer", copy.deepcopy(defaults["prayer"]))
     data.setdefault("system", copy.deepcopy(defaults.get("system", {"show_info": True, "show_network": True, "show_public_network": False, "show_vpn": True, "vpn_label": "", "show_updates": True})))
     data["fetch_interval_minutes"] = clamp_int(data.get("fetch_interval_minutes", defaults["fetch_interval_minutes"]), defaults["fetch_interval_minutes"], 1, 1440)
@@ -364,9 +370,9 @@ def merge_config(data: dict) -> dict:
         data["ui"] = ui
     for key, value in defaults["ui"].items():
         ui.setdefault(key, value)
-    ui["font_size"] = clamp_int(ui.get("font_size", defaults["ui"].get("font_size", 18)), defaults["ui"].get("font_size", 18), 12, 34)
-    ui["news_font_size"] = clamp_int(ui.get("news_font_size", defaults["ui"].get("news_font_size", 19)), defaults["ui"].get("news_font_size", 19), 10, 42)
-    ui["news_font_size_offset"] = clamp_int(ui.get("news_font_size_offset", defaults["ui"].get("news_font_size_offset", 1)), defaults["ui"].get("news_font_size_offset", 1), -3, 6)
+    ui["font_size"] = clamp_int(ui.get("font_size", defaults["ui"].get("font_size", 16)), defaults["ui"].get("font_size", 16), 12, 34)
+    ui["news_font_size"] = clamp_int(ui.get("news_font_size", defaults["ui"].get("news_font_size", 16)), defaults["ui"].get("news_font_size", 16), 10, 42)
+    ui["news_font_size_offset"] = clamp_int(ui.get("news_font_size_offset", defaults["ui"].get("news_font_size_offset", 0)), defaults["ui"].get("news_font_size_offset", 0), -3, 6)
     ui["panel_width"] = clamp_int(ui.get("panel_width", defaults["ui"].get("panel_width", 24)), defaults["ui"].get("panel_width", 24), 16, 96)
     ui["panel_popup_width"] = clamp_int(ui.get("panel_popup_width", defaults["ui"].get("panel_popup_width", 600)), defaults["ui"].get("panel_popup_width", 600), 520, 1400)
 
@@ -468,6 +474,85 @@ def _module_status(module: str, label: str, note: str = "") -> dict:
     }
 
 
+def read_json_post_body(handler) -> dict:
+    raw_length = handler.headers.get("Content-Length")
+    if raw_length is None:
+        raise ValueError("missing Content-Length")
+    try:
+        length = int(raw_length)
+    except (TypeError, ValueError):
+        raise ValueError("invalid Content-Length")
+    if length <= 0:
+        return {}
+    if length > MAX_POST_BYTES:
+        raise ValueError("payload too large")
+    body = handler.rfile.read(length).decode("utf-8")
+    data = json.loads(body or "{}")
+    if not isinstance(data, dict):
+        raise ValueError("JSON body must be an object")
+    return data
+
+
+def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
+    request_headers = {"User-Agent": "DieLage/2.0.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers.update(headers)
+    req = urllib.request.Request(url, headers=request_headers)
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        raw = resp.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError("response too large")
+    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    if not isinstance(payload, dict):
+        raise ValueError("invalid JSON response")
+    return payload
+
+
+def check_single_market_api(provider: str, key: str) -> dict:
+    key = str(key or "").strip()
+    if not key:
+        return {"configured": False, "ok": False, "message": "missing"}
+    try:
+        if provider == "twelve":
+            payload = _api_probe_json(
+                "https://api.twelvedata.com/quote?symbol=AAPL&timezone=Europe%2FBerlin",
+                {"Authorization": f"apikey {key}"},
+            )
+            if payload.get("status") == "error" or payload.get("code"):
+                return {"configured": True, "ok": False, "message": str(payload.get("message") or payload.get("code") or "Twelve Data error")}
+            price = payload.get("close") or payload.get("price") or payload.get("last")
+            if price is None:
+                return {"configured": True, "ok": False, "message": "no quote returned"}
+            return {"configured": True, "ok": True, "message": "AAPL quote received"}
+        if provider == "finnhub":
+            payload = _api_probe_json(
+                "https://finnhub.io/api/v1/quote?symbol=AAPL",
+                {"X-Finnhub-Token": key},
+                max_bytes=200_000,
+            )
+            if payload.get("error"):
+                return {"configured": True, "ok": False, "message": str(payload.get("error"))}
+            price = payload.get("c")
+            try:
+                if price is not None and float(price) > 0:
+                    return {"configured": True, "ok": True, "message": "AAPL quote received"}
+            except Exception:
+                pass
+            return {"configured": True, "ok": False, "message": "no quote returned"}
+    except Exception as exc:
+        return {"configured": True, "ok": False, "message": str(exc)[:180]}
+    return {"configured": False, "ok": False, "message": "unknown provider"}
+
+
+def check_market_apis(twelve_key: str, finnhub_key: str) -> dict:
+    checks = {
+        "twelve": check_single_market_api("twelve", twelve_key),
+        "finnhub": check_single_market_api("finnhub", finnhub_key),
+    }
+    configured = [item for item in checks.values() if item.get("configured")]
+    ok = bool(configured) and all(item.get("ok") for item in configured)
+    return {"ok": ok, "checks": checks}
+
+
 def tool_status() -> dict:
     """Return the helper/runtime tools Die Lage can use on this machine."""
     python_item = {
@@ -510,7 +595,7 @@ def tool_status() -> dict:
 
     return {
         "ok": True,
-        "version": "2.0.4",
+        "version": "2.0.7",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -587,7 +672,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._reject_if_bad_origin():
             return
         path = urllib.parse.urlparse(self.path).path
-        if path in ("/status", "/rss.json", "/config", "/tools"):
+        if path in ("/status", "/rss.json", "/config", "/tools", "/check-market-apis"):
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Cache-Control", "no-store")
@@ -621,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "2.0.4", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "version": "2.0.7", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":
@@ -640,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
         # This blocks old-fashioned CSRF vectors such as plain HTML forms or
         # no-cors text/plain fetches that might omit an Origin header.  QML sets
         # the header explicitly for /config, /refresh and /reset.
-        if path in ("/config", "/refresh", "/reset", "/clear-cache", "/restart") and self._json_post_required():
+        if path in ("/config", "/refresh", "/reset", "/clear-cache", "/restart", "/check-market-apis") and self._json_post_required():
             return
 
         if path == "/refresh":
@@ -687,6 +772,14 @@ class Handler(BaseHTTPRequestHandler):
                     atomic_write_json(CONFIG_FILE, data)
                     apply_boot_timer_config(data)
                 self._send_json({"ok": True, "local_server_port": new_port, "server_restart_required": old_port != new_port})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/check-market-apis":
+            try:
+                payload = read_json_post_body(self)
+                self._send_json(check_market_apis(payload.get("twelve_data_api_key", ""), payload.get("finnhub_api_key", "")))
+            except json.JSONDecodeError as exc:
+                self._send_json({"ok": False, "error": f"invalid JSON: {exc.msg}"}, 400)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/clear-cache":

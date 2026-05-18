@@ -71,7 +71,11 @@ systemctl --user reset-failed "${UNITS[@]}" >/dev/null 2>&1 || true
 # ---- Remove helper scripts --------------------------------------------------
 rm -f "$HOME/.local/bin/dielage-cache.py"
 rm -f "$HOME/.local/bin/dielage-server.py"
-rm -f "$HOME/.local/bin/dielage-uninstall"
+# Keep the uninstaller itself for normal uninstall so a later purge remains
+# possible. Remove it only when --purge is requested.
+if [ "$PURGE" -eq 1 ]; then
+    rm -f "$HOME/.local/bin/dielage-uninstall"
+fi
 
 # ---- Remove plasmoid package ------------------------------------------------
 # Older versions may have left .bak-* siblings; remove every directory whose
@@ -98,10 +102,14 @@ if [ "$PURGE" -eq 1 ]; then
     rm -rf "$HOME/.config/die-lage"
     rm -rf "$HOME/.cache/die-lage"
     echo "Konfiguration und Cache wurden ebenfalls entfernt."
+    echo "Der installierte Uninstaller wurde ebenfalls entfernt."
 else
     echo "Konfiguration ($HOME/.config/die-lage) und"
     echo "Cache ($HOME/.cache/die-lage) bleiben erhalten."
-    echo "Zum vollständigen Entfernen: ./uninstall.sh --purge"
+    echo "Zum vollständigen Entfernen später:"
+    echo "  dielage-uninstall --purge"
+    echo "oder aus diesem Ordner:"
+    echo "  ./uninstall.sh --purge"
 fi
 
 echo

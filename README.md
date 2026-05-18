@@ -33,14 +33,21 @@ Important service settings:
 
 ## Uninstall
 
+Complete removal including settings and cache:
+
 ```bash
-dielage-uninstall
-# or, including configuration and cache:
 dielage-uninstall --purge
 ```
 
-Fallback:
+Fallbacks:
 
 ```bash
 ~/.local/bin/dielage-uninstall --purge
+./uninstall.sh --purge
+```
+
+To remove only the widget and helper while keeping settings and cache:
+
+```bash
+dielage-uninstall
 ```

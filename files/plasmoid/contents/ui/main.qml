@@ -83,15 +83,15 @@ PlasmoidItem {
     property string prayerCity: "Berlin"
     property string prayerCountry: "Germany"
     property string prayerMethod: "3"
-    property string uiFontSize: "18"
+    property string uiFontSize: "16"
     property string uiHighlightColor: ""
     // Desktop-only background: "default", "transparent", or "custom".
     // Panel compact mode and panel popup keep Plasma's normal background.
     property string desktopBackgroundMode: "default"
     property string desktopBackgroundColor: ""
     property string newsFontFamily: ""
-    property string newsFontSize: "19"
-    property string newsFontSizeOffset: "1"
+    property string newsFontSize: "16"
+    property string newsFontSizeOffset: "0"
     // Keep the RSS/news font in step when the global font size changes.
     // The explicit news font setting still works; it simply moves along by
     // the same delta as the main UI font on later changes.
@@ -146,7 +146,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.4"
+    readonly property string appVersion: "2.0.7"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -163,7 +163,7 @@ PlasmoidItem {
     // sequence used before v1.51 so that upgrades look identical until the
     // user reorders. parseBlockOrder() repairs unknown / missing IDs at load
     // time so a hand-edited config can never produce gaps or duplicates.
-    property var blockOrder: ["nina", "weather", "prayer", "markets", "news", "system"]
+    property var blockOrder: ["nina", "weather", "prayer", "system", "markets", "news"]
     property var collapsedBlocks: ({})
 
     // Health flag for the local helper service. Toggled by loadCache() /
@@ -198,16 +198,19 @@ PlasmoidItem {
     property bool showMarketCurrencies: true
     property bool showMarketIndices: true
     property bool showMarketStocks: true
+    property bool marketApiChecking: false
+    property string marketApiStatusMessage: ""
+    property bool marketApiStatusOk: true
     property bool showNews: true
 
-    property int baseFontSize: root.clampInt(root.uiFontSize, 18, 12, 34)
+    property int baseFontSize: root.clampInt(root.uiFontSize, 16, 12, 34)
     onBaseFontSizeChanged: root.syncNewsFontToBaseFontChange()
     property int titleSize: root.baseFontSize + 7
     property int sectionSize: root.baseFontSize + 3
     property int bodySize: root.baseFontSize
     // Explicit RSS/news text size. This intentionally uses newsFontSize directly so
     // RSS feed names and headlines can be adjusted independently from the rest of the widget.
-    property int newsBodySize: root.clampInt(root.newsFontSize, Math.max(10, root.bodySize + root.clampInt(root.newsFontSizeOffset, 1, -3, 6)), 10, 42)
+    property int newsBodySize: root.clampInt(root.newsFontSize, Math.max(10, root.bodySize + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)), 10, 42)
     property int smallSize: Math.max(10, root.baseFontSize - 3)
     property int prayerSize: Math.max(10, root.baseFontSize - 3)
     property int prayerColumns: root.width >= 620 ? 3 : 2
@@ -224,8 +227,8 @@ PlasmoidItem {
             root.newsSyncBaseFontSize = newBase
             return
         }
-        var currentNews = root.clampInt(root.newsFontSize, Math.max(10, oldBase + 1), 10, 42)
-        var shiftedNews = root.clampInt(currentNews + (newBase - oldBase), Math.max(10, newBase + 1), 10, 42)
+        var currentNews = root.clampInt(root.newsFontSize, Math.max(10, oldBase + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)), 10, 42)
+        var shiftedNews = root.clampInt(currentNews + (newBase - oldBase), Math.max(10, newBase + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)), 10, 42)
         root.newsFontSyncInProgress = true
         root.newsFontSize = String(shiftedNews)
         root.newsFontSizeOffset = String(shiftedNews - newBase)
@@ -236,7 +239,7 @@ PlasmoidItem {
     function updateNewsFontSizeFromField(value) {
         root.newsFontSize = value
         var base = root.baseFontSize
-        var currentNews = root.clampInt(value, Math.max(10, base + 1), 10, 42)
+        var currentNews = root.clampInt(value, Math.max(10, base + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)), 10, 42)
         root.newsFontSizeOffset = String(currentNews - base)
     }
 
@@ -531,7 +534,7 @@ PlasmoidItem {
 
     // Canonical block IDs and their default order. Update both lists together.
     readonly property var allBlockIds: ["weather", "prayer", "nina", "system", "markets", "news"]
-    readonly property var defaultBlockOrder: ["nina", "weather", "prayer", "markets", "news", "system"]
+    readonly property var defaultBlockOrder: ["nina", "weather", "prayer", "system", "markets", "news"]
     readonly property var blockOrderModel: root.parseBlockOrder(root.blockOrder)
 
     // Coerce an arbitrary value (string, array, malformed JSON) into a clean
@@ -819,6 +822,13 @@ PlasmoidItem {
             "providerHint": "Automatic: stocks try API-key providers first; indices try Yahoo first. Choose Twelve Data, Finnhub or Yahoo to prefer one provider; Die Lage still uses fallbacks when a source fails. API keys are optional and stored only locally. Yahoo does not need a key, but is an unofficial fallback.",
             "twelveKey": "Twelve Data API key – optional. Get it from twelvedata.com. Stored locally and used for market data depending on source mode.",
             "finnhubKey": "Finnhub API key – optional. Get it from finnhub.io/register. Stored locally and used as another market-data source.",
+            "checkMarketApis": "Check API keys",
+            "marketApiChecking": "Checking market API keys …",
+            "marketApiNoKeys": "No Twelve Data or Finnhub API key entered. Yahoo can still be used without an API key.",
+            "marketApiOk": "API key works",
+            "marketApiFailed": "API key check failed",
+            "marketApiMissing": "No key entered",
+            "marketApiCheckFailed": "API key check failed: HTTP ",
             "prayerSettings": "Islamic Prayer Times – location and calculation",
             "prayerHelp": "Source: AlAdhan Prayer Times API. City/country are sent to the API as text; use common English spellings such as Berlin/Germany. If a city is not accepted, use a nearby larger city or check aladhan.com/prayer-times-api.",
             "prayerHighlightUpcoming": "Highlight upcoming prayer time",
@@ -925,8 +935,8 @@ PlasmoidItem {
             "helperMissingHint": "Click Download installer ZIP, save it to Downloads, unpack it, run the commands below, then click Retry. The ZIP unpacks to die-lage-latest and contains the helper scripts plus systemd user units. No root password is needed because the service runs as a normal systemd user service.",
             "downloadInstallerZip": "Download installer ZIP",
             "uninstallTitle": "Complete removal",
-            "uninstallText": "Plasma can remove the visible widget, but not reliably the local helper scripts, cache timer and systemd user units. Use these commands for a clean uninstall.",
-            "uninstallCommands": "dielage-uninstall\n# complete removal including config and cache:\ndielage-uninstall --purge\n# if the command is not in PATH:\n~/.local/bin/dielage-uninstall --purge",
+            "uninstallText": "Plasma can remove the visible widget, but not reliably the local helper scripts, cache timer and systemd user units. Choose one command: use --purge for complete removal including settings and cache, or run dielage-uninstall without --purge to keep settings and cache.",
+            "uninstallCommands": "# complete removal including settings and cache:\ndielage-uninstall --purge\n# fallback if the command is not in PATH:\n~/.local/bin/dielage-uninstall --purge\n# from the full release ZIP folder:\n./uninstall.sh --purge\n\n# keep settings and cache instead:\ndielage-uninstall",
             "copyCommand": "Copy command",
             "copied": "Copied",
             "openHomepage": "Project page",
@@ -1053,6 +1063,13 @@ PlasmoidItem {
             "providerHint": "Automatisch: Aktien versuchen zuerst Anbieter mit API-Key; Indizes versuchen zuerst Yahoo. Mit Twelve Data, Finnhub oder Yahoo bevorzugen Sie einen Anbieter; Die Lage nutzt bei Fehlern weiterhin Fallbacks. API-Keys sind optional und bleiben lokal gespeichert. Yahoo benötigt keinen Key, ist aber ein inoffizieller Fallback.",
             "twelveKey": "Twelve Data API-Key – optional. Erhältlich über twelvedata.com. Wird lokal gespeichert und je nach Quellenmodus für Marktdaten genutzt.",
             "finnhubKey": "Finnhub API-Key – optional. Erhältlich über finnhub.io/register. Wird lokal gespeichert und als weitere Marktdaten-Quelle genutzt.",
+            "checkMarketApis": "API-Keys prüfen",
+            "marketApiChecking": "Marktdaten-API-Keys werden geprüft …",
+            "marketApiNoKeys": "Kein Twelve-Data- oder Finnhub-API-Key eingetragen. Yahoo kann weiterhin ohne API-Key genutzt werden.",
+            "marketApiOk": "API-Key funktioniert",
+            "marketApiFailed": "API-Key-Prüfung fehlgeschlagen",
+            "marketApiMissing": "Kein Key eingetragen",
+            "marketApiCheckFailed": "API-Key-Prüfung fehlgeschlagen: HTTP ",
             "prayerSettings": "Islamische Gebetszeiten – Ort und Berechnung",
             "prayerHelp": "Quelle: AlAdhan Prayer Times API. Stadt/Land werden als Text an die API gesendet; verwenden Sie übliche englische Schreibweisen wie Berlin/Germany. Wenn ein Ort nicht akzeptiert wird, nehmen Sie eine größere Stadt in der Nähe oder prüfen Sie aladhan.com/prayer-times-api.",
             "prayerHighlightUpcoming": "Bevorstehende Gebetszeit hervorheben",
@@ -1159,8 +1176,8 @@ PlasmoidItem {
             "helperMissingHint": "Klicken Sie auf Installer-ZIP herunterladen, speichern Sie die Datei im Ordner Downloads, entpacken Sie sie, führen Sie die unten stehenden Befehle aus und klicken Sie danach auf Erneut verbinden. Das ZIP entpackt sich nach die-lage-latest und enthält Helper-Skripte sowie systemd-User-Units. Kein Root-Passwort ist nötig, weil der Dienst als normaler systemd-User-Service läuft.",
             "downloadInstallerZip": "Installer-ZIP herunterladen",
             "uninstallTitle": "Komplett deinstallieren",
-            "uninstallText": "Plasma kann das sichtbare Widget entfernen, aber nicht zuverlässig lokale Helper-Skripte, Cache-Timer und systemd-User-Units. Für eine saubere Deinstallation verwenden Sie diese Befehle.",
-            "uninstallCommands": "dielage-uninstall\n# vollständig inkl. Konfiguration und Cache:\ndielage-uninstall --purge\n# falls der Befehl nicht im PATH ist:\n~/.local/bin/dielage-uninstall --purge",
+            "uninstallText": "Plasma kann das sichtbare Widget entfernen, aber nicht zuverlässig lokale Helper-Skripte, Cache-Timer und systemd-User-Units. Wählen Sie einen Befehl: Für vollständiges Entfernen inklusive Einstellungen und Cache verwenden Sie --purge; ohne --purge bleiben Einstellungen und Cache erhalten.",
+            "uninstallCommands": "# vollständig inkl. Einstellungen und Cache entfernen:\ndielage-uninstall --purge\n# falls der Befehl nicht im PATH ist:\n~/.local/bin/dielage-uninstall --purge\n# aus dem vollständigen Release-ZIP-Ordner:\n./uninstall.sh --purge\n\n# Einstellungen und Cache behalten:\ndielage-uninstall",
             "copyCommand": "Befehl kopieren",
             "copied": "Kopiert",
             "openHomepage": "Projektseite",
@@ -1273,6 +1290,7 @@ PlasmoidItem {
         var known = [
             "open-meteo.com/en/docs",
             "twelvedata.com/docs",
+            "twelvedata.com",
             "finnhub.io/register",
             "aladhan.com/prayer-times-api",
             "aladhan.com/calculation-methods"
@@ -1906,14 +1924,14 @@ PlasmoidItem {
         }
 
         if (data.ui) {
-            root.uiFontSize = String(data.ui.font_size || 18)
+            root.uiFontSize = String(data.ui.font_size || 16)
             root.uiHighlightColor = data.ui.highlight_color ? String(data.ui.highlight_color) : ""
             root.desktopBackgroundMode = root.cleanDesktopBackgroundMode(data.ui.desktop_background_mode || "default")
             root.desktopBackgroundColor = data.ui.desktop_background_color ? String(data.ui.desktop_background_color) : ""
             root.uiLanguage = data.ui.language ? String(data.ui.language) : "de"
             root.newsFontFamily = data.ui.news_font_family ? String(data.ui.news_font_family) : ""
-            root.newsFontSizeOffset = String(data.ui.news_font_size_offset !== undefined ? data.ui.news_font_size_offset : 1)
-            root.newsFontSize = String(data.ui.news_font_size !== undefined ? data.ui.news_font_size : (root.clampInt(root.uiFontSize, 18, 12, 34) + root.clampInt(root.newsFontSizeOffset, 1, -3, 6)))
+            root.newsFontSizeOffset = String(data.ui.news_font_size_offset !== undefined ? data.ui.news_font_size_offset : 0)
+            root.newsFontSize = String(data.ui.news_font_size !== undefined ? data.ui.news_font_size : (root.clampInt(root.uiFontSize, 16, 12, 34) + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)))
             root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = data.ui.panel_mode === "warnings" || data.ui.panel_mode === "ticker" ? "warnings" : "icon"
             root.panelIconMode = root.cleanPanelIconMode(data.ui.panel_icon_mode || "dielage")
@@ -1938,8 +1956,8 @@ PlasmoidItem {
             root.desktopBackgroundColor = ""
             root.uiLanguage = "de"
             root.newsFontFamily = ""
-            root.newsFontSizeOffset = "1"
-            root.newsFontSize = String(root.clampInt(root.uiFontSize, 18, 12, 34) + 1)
+            root.newsFontSizeOffset = "0"
+            root.newsFontSize = String(root.clampInt(root.uiFontSize, 16, 12, 34))
             root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = "icon"
             root.panelIconMode = "dielage"
@@ -1961,8 +1979,8 @@ PlasmoidItem {
             root.desktopBackgroundColor = ""
             root.uiLanguage = "de"
             root.newsFontFamily = ""
-            root.newsFontSizeOffset = "1"
-            root.newsFontSize = String(root.clampInt(root.uiFontSize, 18, 12, 34) + 1)
+            root.newsFontSizeOffset = "0"
+            root.newsFontSize = String(root.clampInt(root.uiFontSize, 16, 12, 34))
             root.newsSyncBaseFontSize = root.baseFontSize
             root.panelMode = "icon"
             root.panelIconMode = "dielage"
@@ -2096,8 +2114,8 @@ PlasmoidItem {
         root.saving = true
 
         // Compute font sizes once; the offset is just (news - base).
-        var clampedFontSize = root.clampInt(root.uiFontSize, 18, 12, 34)
-        var newsFallback = Math.max(10, clampedFontSize + root.clampInt(root.newsFontSizeOffset, 1, -3, 6))
+        var clampedFontSize = root.clampInt(root.uiFontSize, 16, 12, 34)
+        var newsFallback = Math.max(10, clampedFontSize + root.clampInt(root.newsFontSizeOffset, 0, -3, 6))
         var clampedNewsSize = root.clampInt(root.newsFontSize, newsFallback, 10, 42)
 
         // Normalize panel popup width before saving so the field does not
@@ -2512,6 +2530,65 @@ PlasmoidItem {
         }
         xhr.open("GET", root.baseUrl + "/tools?t=" + Date.now())
         xhr.send()
+    }
+
+    function marketApiLine(label, item) {
+        if (!item || item.configured !== true) {
+            return label + ": " + root.t("marketApiMissing")
+        }
+        if (item.ok === true) {
+            return label + ": " + root.t("marketApiOk")
+        }
+        var detail = String(item.message || "").trim()
+        return label + ": " + root.t("marketApiFailed") + (detail.length > 0 ? " – " + detail : "")
+    }
+
+    function checkMarketApis() {
+        var twelveKey = String(root.twelveDataApiKey || "").trim()
+        var finnhubKey = String(root.finnhubApiKey || "").trim()
+        root.marketApiChecking = true
+        root.marketApiStatusOk = true
+        root.marketApiStatusMessage = root.t("marketApiChecking")
+
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr, "status")
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                root.marketApiChecking = false
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText || "{}")
+                        var checks = data.checks || {}
+                        var lines = []
+                        var anyConfigured = false
+                        if (checks.twelve && checks.twelve.configured === true) anyConfigured = true
+                        if (checks.finnhub && checks.finnhub.configured === true) anyConfigured = true
+                        if (!anyConfigured) {
+                            root.marketApiStatusOk = true
+                            root.marketApiStatusMessage = root.t("marketApiNoKeys")
+                            return
+                        }
+                        lines.push(root.marketApiLine("Twelve Data", checks.twelve))
+                        lines.push(root.marketApiLine("Finnhub", checks.finnhub))
+                        root.marketApiStatusOk = data.ok === true
+                        root.marketApiStatusMessage = lines.join("\n")
+                    } catch (e) {
+                        root.marketApiStatusOk = false
+                        root.marketApiStatusMessage = root.t("marketApiCheckFailed") + "parse"
+                    }
+                } else {
+                    root.marketApiStatusOk = false
+                    root.marketApiStatusMessage = root.t("marketApiCheckFailed") + xhr.status
+                    if (xhr.status === 0 && !root.portDiscoveryInProgress) {
+                        root.helperOk = false
+                        root.discoverLocalHelperPort()
+                    }
+                }
+            }
+        }
+        xhr.open("POST", root.baseUrl + "/check-market-apis")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send(JSON.stringify({"twelve_data_api_key": twelveKey, "finnhub_api_key": finnhubKey}))
     }
 
     Component.onCompleted: {
@@ -3590,7 +3667,7 @@ PlasmoidItem {
                                         Layout.minimumWidth: 0
                                         text: root.newsFontFamily
                                         font.pixelSize: root.smallSize
-                                        placeholderText: root.uiLanguage === "en" ? "empty = Plasma default, e.g. Atkinson Hyperlegible, Inter, Noto Serif" : "leer = Plasma-Standard, z. B. Atkinson Hyperlegible, Inter, Noto Serif"
+                                        placeholderText: root.uiLanguage === "en" ? "empty = Plasma default, e.g. Noto Sans Mono, Atkinson Hyperlegible, Inter" : "leer = Plasma-Standard, z. B. Noto Sans Mono, Atkinson Hyperlegible, Inter"
                                         onTextChanged: root.newsFontFamily = text
                                     }
 
@@ -4187,6 +4264,44 @@ PlasmoidItem {
                                     font.pixelSize: root.smallSize
                                     placeholderText: "optional"
                                     onTextChanged: root.finnhubApiKey = text
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    QQC2.Button {
+                                        text: root.marketApiChecking ? root.t("loading") : root.t("checkMarketApis")
+                                        icon.name: "network-connect"
+                                        enabled: !root.marketApiChecking && root.helperOk
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onClicked: root.checkMarketApis()
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                Rectangle {
+                                    visible: root.marketApiStatusMessage.length > 0
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: root.marketApiStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                    border.width: 1
+                                    radius: 6
+                                    opacity: 0.98
+                                    implicitHeight: marketApiStatusMessageLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                                    PlasmaComponents3.Label {
+                                        id: marketApiStatusMessageLabel
+                                        anchors.fill: parent
+                                        anchors.margins: Kirigami.Units.largeSpacing
+                                        text: root.marketApiStatusMessage
+                                        color: root.marketApiStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                    }
                                 }
                             }
 

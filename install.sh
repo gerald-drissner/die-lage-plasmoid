@@ -265,9 +265,9 @@ import time
 path = Path.home() / ".config/die-lage/config.json"
 default_prayer = {"city": "Berlin", "country": "Germany", "method": 3}
 default_ui = {
-    "font_size": 18, "highlight_color": "", "desktop_background_mode": "default",
-    "desktop_background_color": "", "news_font_family": "", "news_font_size": 19,
-    "news_font_size_offset": 1, "language": "de", "panel_mode": "icon",
+    "font_size": 16, "highlight_color": "", "desktop_background_mode": "default",
+    "desktop_background_color": "", "news_font_family": "", "news_font_size": 16,
+    "news_font_size_offset": 0, "language": "de", "panel_mode": "icon",
     "panel_icon_mode": "dielage", "panel_theme_icon": "view-list-details",
     "panel_warning_badge": True, "panel_no_warnings_mode": "icon",
     "panel_width": 24, "panel_popup_width": 600, "panel_middle_click_refresh": True,
@@ -283,7 +283,7 @@ default_markets = {
     "stocks": [], "show_currencies": True, "show_indices": True, "show_stocks": True,
     "twelve_data_api_key": "", "finnhub_api_key": "", "provider_mode": "auto",
 }
-default_block_order = ["nina", "weather", "prayer", "markets", "news", "system"]
+default_block_order = ["nina", "weather", "prayer", "system", "markets", "news"]
 default_collapsed_blocks = {key: False for key in default_block_order}
 old_default_block_order = ["weather", "prayer", "nina", "system", "markets", "news"]
 default_feeds = [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
@@ -326,7 +326,7 @@ if not isinstance(ui, dict):
 for key, value in default_ui.items():
     if key == "news_font_size" and key not in ui:
         try:
-            ui[key] = int(ui.get("font_size", 18)) + int(ui.get("news_font_size_offset", 1))
+            ui[key] = int(ui.get("font_size", 16)) + int(ui.get("news_font_size_offset", 0))
         except Exception:
             ui[key] = value
     else:
@@ -393,7 +393,16 @@ data.setdefault("fetch_interval_minutes", 10)
 data.setdefault("local_server_port", 8765)
 data.setdefault("boot_refresh_enabled", True)
 data.setdefault("boot_refresh_delay_seconds", 120)
-data.setdefault("nina_codes", data.get("nina_codes", []))
+default_nina_codes = [{"source": "nina", "name": "Berlin", "code": "110000000000"}]
+old_default_nina_codes = [
+    {"source": "nina", "name": "Berlin", "code": "110000000000"},
+    {"source": "nina", "name": "Hennigsdorf", "code": "120650136136"},
+    {"source": "nina", "name": "Oberhavel", "code": "120650000000"},
+]
+if not isinstance(data.get("nina_codes"), list):
+    data["nina_codes"] = list(default_nina_codes)
+elif data.get("nina_codes") == old_default_nina_codes:
+    data["nina_codes"] = list(default_nina_codes)
 
 # Repair block_order: keep known ids in stored order, append missing ones.
 raw_order = data.get("block_order")

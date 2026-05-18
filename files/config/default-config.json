@@ -93,16 +93,6 @@
       "name": "Berlin",
       "code": "110000000000",
       "source": "nina"
-    },
-    {
-      "name": "Hennigsdorf",
-      "code": "120650136136",
-      "source": "nina"
-    },
-    {
-      "name": "Oberhavel",
-      "code": "120650000000",
-      "source": "nina"
     }
   ],
   "prayer": {
@@ -143,11 +133,11 @@
   "boot_refresh_enabled": true,
   "boot_refresh_delay_seconds": 120,
   "ui": {
-    "font_size": 18,
+    "font_size": 16,
     "highlight_color": "",
     "news_font_family": "",
-    "news_font_size_offset": 1,
-    "news_font_size": 19,
+    "news_font_size_offset": 0,
+    "news_font_size": 16,
     "language": "de",
     "panel_mode": "icon",
     "desktop_background_mode": "default",
@@ -178,9 +168,9 @@
     "nina",
     "weather",
     "prayer",
+    "system",
     "markets",
-    "news",
-    "system"
+    "news"
   ],
   "system": {
     "show_info": true,

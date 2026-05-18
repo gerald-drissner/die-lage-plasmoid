@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.0.7
+
+Uninstall-instruction correction after the 2.0 release.
+
+- Clarified the uninstall commands shown in Info / Dienst so users choose one command instead of copying a full multi-command example.
+- Put complete removal with `dielage-uninstall --purge` first.
+- Added the full-ZIP fallback `./uninstall.sh --purge` to the visible uninstall instructions.
+- Changed the normal uninstaller so it keeps `dielage-uninstall` available when settings/cache are preserved, making a later purge possible.
+- Removed the installed uninstaller only during `--purge`.
+
+## v2.0.6
+
+Small settings polish after v2.0.4.
+
+- Made the plain `twelvedata.com` reference clickable in the market settings.
+- Added an API-key check button for Twelve Data and Finnhub in the market settings.
+- Added a local helper endpoint that checks the entered market API keys without saving them first.
+- Changed the bundled default block order to: warnings, weather, prayer times, system, markets, news.
+
 ## v2.0.4
 
 RSS typography fix after the 2.0 release.
