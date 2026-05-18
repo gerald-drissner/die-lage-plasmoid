@@ -126,7 +126,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.9 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 

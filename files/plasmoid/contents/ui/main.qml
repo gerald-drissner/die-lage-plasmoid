@@ -146,7 +146,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.7"
+    readonly property string appVersion: "2.0.9"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -841,7 +841,7 @@ PlasmoidItem {
             "saving": "Saving…",
             "cancel": "Cancel",
             "location": "Location",
-            "ninaOfficial": "Official warning available. Please check details.",
+            "ninaOfficial": "Official warning active. Please review the guidance and details.",
             "noWarningsFor": "No current warnings for ",
             "noWarnings": "No current warnings",
             "warning": "Warning",
@@ -1082,7 +1082,7 @@ PlasmoidItem {
             "saving": "Speichert…",
             "cancel": "Abbrechen",
             "location": "Ort",
-            "ninaOfficial": "Amtliche Warnmeldung vorhanden. Bitte Details prüfen.",
+            "ninaOfficial": "Amtliche Warnung aktiv. Hinweise und Verhaltensregeln prüfen.",
             "noWarningsFor": "Keine aktuellen Warnungen für ",
             "noWarnings": "Keine aktuellen Warnungen",
             "warning": "Warnung",
@@ -2607,18 +2607,21 @@ PlasmoidItem {
         onTriggered: root.nowTick = Date.now()
     }
 
+    // Keep the visible dashboard in sync with the cache file.  The real
+    // network refresh is handled by the systemd user timer and cache helper;
+    // this timer only re-reads /rss.json from the local helper.  Polling the
+    // local cache every 30 seconds avoids a race where the widget checked the
+    // cache just before the background helper finished writing it, then kept
+    // showing stale data until the user opened settings.
     Timer {
-        id: autoFetchTimer
-        interval: root.clampInt(root.fetchIntervalMinutes, 10, 1, 1440) * 60000
+        id: displayCacheReloadTimer
+        interval: 30000
         running: true
         repeat: true
-        onTriggered: root.loadCache()
-    }
-
-    Connections {
-        target: root
-        function onFetchIntervalMinutesChanged() {
-            autoFetchTimer.restart()
+        onTriggered: {
+            if (!root.saving && !root.refreshing && !root.portDiscoveryInProgress) {
+                root.loadCache()
+            }
         }
     }
 
@@ -5197,16 +5200,42 @@ PlasmoidItem {
                             Item { Layout.fillWidth: true }
                         }
 
-                        PlasmaComponents3.Label {
+                        Rectangle {
                             visible: root.ninaHasWarnings()
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
-                            text: root.t("ninaOfficial")
-                            color: Kirigami.Theme.negativeTextColor
-                            opacity: 0.88
-                            font.pixelSize: root.smallSize
-                            wrapMode: Text.WordWrap
-                            elide: Text.ElideNone
+                            radius: Kirigami.Units.smallSpacing
+                            color: Qt.rgba(0.90, 0.05, 0.03, 0.10)
+                            border.color: Kirigami.Theme.negativeTextColor
+                            border.width: 1
+                            implicitHeight: ninaOfficialRow.implicitHeight + Kirigami.Units.smallSpacing * 2
+
+                            RowLayout {
+                                id: ninaOfficialRow
+                                anchors.fill: parent
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                spacing: Kirigami.Units.smallSpacing
+
+                                PlasmaComponents3.Label {
+                                    text: "⚠"
+                                    color: Kirigami.Theme.negativeTextColor
+                                    font.pixelSize: root.bodySize
+                                    font.bold: true
+                                    Layout.alignment: Qt.AlignTop
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("ninaOfficial")
+                                    color: Kirigami.Theme.negativeTextColor
+                                    opacity: 0.96
+                                    font.pixelSize: root.smallSize
+                                    font.bold: true
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
                         }
 
                         PlasmaComponents3.Label {

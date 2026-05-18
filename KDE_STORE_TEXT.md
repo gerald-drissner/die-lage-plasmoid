@@ -1,10 +1,10 @@
 # Die Lage
 
-## v2.0.7 highlights
+## v2.0.9 highlights
 
-- Clarifies the uninstall instructions shown under Info / Dienst.
-- Complete removal now clearly uses `dielage-uninstall --purge`.
-- A normal uninstall keeps the uninstaller available so settings and cache can still be purged later.
+- Improves automatic display refresh reliability.
+- The widget now re-reads the local cache every 30 seconds, so background updates become visible without opening the settings first.
+- This does not increase external network calls; it only reads the local helper cache.
 
 ## Installation note
 

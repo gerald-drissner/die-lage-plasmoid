@@ -494,7 +494,7 @@ def read_json_post_body(handler) -> dict:
 
 
 def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
-    request_headers = {"User-Agent": "DieLage/2.0.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers = {"User-Agent": "DieLage/2.0.9 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
     request_headers.update(headers)
     req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -595,7 +595,7 @@ def tool_status() -> dict:
 
     return {
         "ok": True,
-        "version": "2.0.7",
+        "version": "2.0.9",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -706,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "2.0.7", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "version": "2.0.9", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":

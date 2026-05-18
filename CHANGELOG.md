@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.0.9
+
+Warning-block wording and visual polish.
+
+- Reworded the warning-status text in German and English so it reads more naturally.
+- Changed the German text from the awkward “Amtliche Warnmeldung vorhanden” wording to a clearer active-warning notice.
+- Added a subtle warning banner treatment inside the Warnmeldungen/Warnings block so active warnings are easier to notice without making the whole dashboard noisy.
+- Kept the existing warning item cards and severity coloring intact.
+
+## v2.0.8
+
+Display refresh reliability fix.
+
+- Added a lightweight local cache polling timer so the visible dashboard re-reads `/rss.json` every 30 seconds.
+- Keeps the display in sync when the systemd background timer has refreshed the cache but the QML view did not repaint or reload it yet.
+- Avoids an observed stale-display race where opening settings caused the dashboard to update immediately.
+- Does not increase external network calls; it only reads the local helper cache.
+
 ## v2.0.7
 
 Uninstall-instruction correction after the 2.0 release.

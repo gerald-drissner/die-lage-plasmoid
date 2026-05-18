@@ -15,11 +15,11 @@
     "License": "MIT",
     "Name": "Die Lage",
     "Name[en]": "Daily Briefing",
-    "Version": "2.0.7",
+    "Version": "2.0.9",
     "Website": "https://github.com/gerald-drissner/die-lage-plasmoid",
     "Copyright": "© 2026 Gerald Drißner"
   },
   "X-Plasma-API-Minimum-Version": "6.0",
   "KPackageStructure": "Plasma/Applet",
-  "Version": "2.0.7"
+  "Version": "2.0.9"
 }

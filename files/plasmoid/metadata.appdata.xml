@@ -93,26 +93,52 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.0.9" date="2026-05-18">
+      <description>
+        <p>Improves the active warning notice with clearer German and English wording and a more visible warning banner.</p>
+        <p xml:lang="de">Verbessert den Hinweis bei aktiven Warnmeldungen mit klarerer deutscher und englischer Formulierung und einem besser sichtbaren Warnbanner.</p>
+      </description>
+    </release>
+    <release version="2.0.9" date="2026-05-18">
+      <description>
+        <p>Adds a lightweight local cache polling timer so the visible dashboard stays in sync with background cache refreshes.</p>
+        <p xml:lang="de">Ergänzt einen leichten lokalen Cache-Polling-Timer, damit das sichtbare Dashboard mit Hintergrund-Aktualisierungen des Caches synchron bleibt.</p>
+      </description>
+    </release>
     <release version="2.0.7" date="2026-05-18">
       <description>
         <p>Clarifies the uninstall instructions shown in Info / Service and keeps the installed uninstaller available after a normal uninstall so users can purge settings and cache later.</p>
         <p xml:lang="de">Präzisiert die Deinstallationshinweise unter Info / Dienst und lässt den installierten Uninstaller nach einer normalen Deinstallation verfügbar, damit Einstellungen und Cache später noch vollständig entfernt werden können.</p>
       </description>
     </release>
-    <release version="2.0.7" date="2026-05-18">
+    <release version="2.0.6" date="2026-05-18">
       <description>
-        <p>Adds market API key checks, makes the Twelve Data URL clickable in settings, and adjusts the default block order so System appears before Markets and News.</p>
+        <p>Adjusts default warning areas, default font sizes and RSS/news font suggestions.</p>
+        <p xml:lang="de">Passt die Standard-Warngebiete, die Standardschriftgrößen und die Vorschläge für die RSS-/Nachrichtenschrift an.</p>
+      </description>
+    </release>
+    <release version="2.0.5" date="2026-05-18">
+      <description>
+        <p>Adds market API key checks, makes Twelve Data links clickable in settings, and adjusts the default block order.</p>
+        <p xml:lang="de">Ergänzt eine Prüfung der Marktdaten-API-Keys, macht Twelve-Data-Links in den Einstellungen anklickbar und passt die Standard-Reihenfolge der Blöcke an.</p>
+      </description>
+    </release>
+    <release version="2.0.4" date="2026-05-18">
+      <description>
+        <p>Adds a separate RSS/news font size setting.</p>
+        <p xml:lang="de">Ergänzt eine separate Schriftgrößen-Einstellung für RSS/Nachrichten.</p>
       </description>
     </release>
     <release version="2.0.2" date="2026-05-18">
       <description>
-        <p>Fixes cache-clearing feedback and adds a local tool check in Info / Service for required, recommended and optional Linux helper tools.</p>
-        <p xml:lang="de">Korrigiert die Rückmeldung beim Cache-Löschen und ergänzt unter Info / Dienst eine lokale Werkzeugprüfung für notwendige, empfohlene und optionale Linux-Helfer.</p>
+        <p>Fixes cache-clearing feedback and adds a local tool check in Info / Service.</p>
+        <p xml:lang="de">Korrigiert die Rückmeldung beim Cache-Löschen und ergänzt unter Info / Dienst eine lokale Werkzeugprüfung.</p>
       </description>
     </release>
     <release version="2.0.0" date="2026-05-18">
       <description>
-        <p>Major maintenance release with polished helper-service controls, clearer first-run installation guidance, configurable boot refresh, configurable local helper port, cache clearing, service restart controls, and cleanup of the Info / Dienst settings flow.</p>
+        <p>Major maintenance release with polished helper-service controls, clearer first-run installation guidance, configurable boot refresh, configurable local helper port, cache clearing and service restart controls.</p>
+        <p xml:lang="de">Großes Wartungs-Release mit überarbeiteten Helper-Dienst-Kontrollen, klarerer Erstinstallation, konfigurierbarer Boot-Aktualisierung, konfigurierbarem lokalem Port, Cache-Löschung und Dienst-Neustart.</p>
       </description>
     </release>
     <release version="1.60.8" date="2026-05-18">
