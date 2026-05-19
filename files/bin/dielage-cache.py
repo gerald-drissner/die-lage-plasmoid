@@ -9,6 +9,8 @@ except Exception:
     ZoneInfo = None
 import copy
 import csv
+import fcntl
+import getpass
 import html
 import os
 import io
@@ -126,9 +128,10 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.9 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.11 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
-SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+SAFE_SUBPROCESS_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": SAFE_SUBPROCESS_PATH}
 
 # Only allow http/https in user-supplied URLs. Without this guard, a config
 # pointing at file:// could read local files, and ftp:// or other schemes
@@ -1785,19 +1788,41 @@ def fetch_markets(old: dict, config: dict) -> dict:
     }
 
 
-def run_command(args: list[str], timeout: float = 3.0) -> tuple[bool, str]:
+def resolve_command(command: str) -> str | None:
+    """Return an absolute executable path using the user's PATH first and the
+    helper's sanitized PATH second.  This keeps the tool-detection checks and
+    subprocess execution in sync under systemd user services.
+    """
+    found = shutil.which(command)
+    if found:
+        return found
+    return shutil.which(command, path=SAFE_SUBPROCESS_PATH)
+
+
+def run_process(args: list[str], timeout: float = 3.0, env: dict | None = None) -> subprocess.CompletedProcess | None:
+    if not args:
+        return None
+    exe = resolve_command(args[0])
+    if not exe:
+        return None
     try:
-        proc = subprocess.run(
-            args,
+        return subprocess.run(
+            [exe] + list(args[1:]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
             check=False,
-            env=SAFE_SUBPROCESS_ENV,
+            env=env or SAFE_SUBPROCESS_ENV,
         )
-    except Exception as exc:
-        return False, str(exc)
+    except Exception:
+        return None
+
+
+def run_command(args: list[str], timeout: float = 3.0) -> tuple[bool, str]:
+    proc = run_process(args, timeout=timeout)
+    if proc is None:
+        return False, f"{args[0] if args else 'command'} not found"
 
     out = (proc.stdout or "").strip()
     err = (proc.stderr or "").strip()
@@ -1833,31 +1858,181 @@ def format_boot_time(english: bool = False) -> tuple[str, str]:
         return "--", "--"
 
 
+def _format_session_type(value: str) -> str:
+    value = (value or "").strip().lower()
+    if value == "wayland":
+        return "Wayland"
+    if value in ("x11", "xorg"):
+        return "X11"
+    return value.strip() if value else ""
+
+
+def _loginctl_session_ids() -> list[str]:
+    ids: list[str] = []
+    current = (os.environ.get("XDG_SESSION_ID") or "").strip()
+    if current:
+        ids.append(current)
+
+    if not shutil.which("loginctl"):
+        return ids
+
+    ok, out = run_command(["loginctl", "list-sessions", "--no-legend"], timeout=2.5)
+    if not ok or not out:
+        return ids
+
+    uid = str(os.getuid())
+    user = getpass.getuser()
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        session_id = parts[0]
+        session_uid = parts[1] if len(parts) > 1 else ""
+        session_user = parts[2] if len(parts) > 2 else ""
+        if session_id and (session_uid == uid or session_user == user) and session_id not in ids:
+            ids.append(session_id)
+    return ids
+
+
+def _loginctl_session_properties(session_id: str) -> dict[str, str]:
+    if not session_id or not shutil.which("loginctl"):
+        return {}
+    ok, out = run_command([
+        "loginctl",
+        "show-session",
+        session_id,
+        "-p", "Type",
+        "-p", "Desktop",
+        "-p", "Class",
+        "-p", "State",
+        "-p", "Active",
+    ], timeout=2.5)
+    if not ok or not out:
+        return {}
+    props: dict[str, str] = {}
+    for line in out.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        props[key.strip()] = value.strip()
+    return props
+
+
+def _graphical_login_sessions() -> list[dict[str, str]]:
+    sessions: list[dict[str, str]] = []
+    for session_id in _loginctl_session_ids():
+        props = _loginctl_session_properties(session_id)
+        if not props:
+            continue
+        props["Id"] = session_id
+        session_type = (props.get("Type") or "").strip().lower()
+        session_class = (props.get("Class") or "").strip().lower()
+        desktop = (props.get("Desktop") or "").strip().lower()
+        if session_type in ("wayland", "x11", "xorg") or desktop or session_class == "user":
+            sessions.append(props)
+
+    def score(props: dict[str, str]) -> tuple[int, int, int, int]:
+        active = 1 if (props.get("Active") or "").lower() == "yes" else 0
+        state = 1 if (props.get("State") or "").lower() in ("active", "online") else 0
+        graphical = 1 if (props.get("Type") or "").lower() in ("wayland", "x11", "xorg") else 0
+        kde = 1 if (props.get("Desktop") or "").lower() in ("kde", "plasma") else 0
+        return (active, state, graphical, kde)
+
+    return sorted(sessions, key=score, reverse=True)
+
+
 def current_session_type() -> str:
-    session = (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower()
+    session = _format_session_type(os.environ.get("XDG_SESSION_TYPE") or "")
     if session:
-        return "Wayland" if session == "wayland" else ("X11" if session in ("x11", "xorg") else session)
+        return session
     if os.environ.get("WAYLAND_DISPLAY"):
         return "Wayland"
     if os.environ.get("DISPLAY"):
         return "X11"
-    ok, out = run_command(["loginctl", "show-session", os.environ.get("XDG_SESSION_ID", ""), "-p", "Type", "--value"], timeout=2)
-    if ok and out:
-        return "Wayland" if out.lower() == "wayland" else ("X11" if out.lower() in ("x11", "xorg") else out)
+
+    for props in _graphical_login_sessions():
+        session = _format_session_type(props.get("Type") or "")
+        if session:
+            return session
+
+    runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    try:
+        if any(runtime_dir.glob("wayland-*")):
+            return "Wayland"
+    except Exception:
+        pass
+    try:
+        if Path("/tmp/.X11-unix").exists() and any(Path("/tmp/.X11-unix").iterdir()):
+            return "X11"
+    except Exception:
+        pass
     return "--"
+
+
+def _package_version(package_names: list[str]) -> str:
+    if shutil.which("pacman"):
+        for package in package_names:
+            ok, out = run_command(["pacman", "-Q", package], timeout=2.5)
+            if ok and out:
+                parts = out.split()
+                if len(parts) >= 2:
+                    return parts[1]
+    if shutil.which("dpkg-query"):
+        for package in package_names:
+            ok, out = run_command(["dpkg-query", "-W", "-f=${Version}", package], timeout=2.5)
+            if ok and out and "no packages found" not in out.lower():
+                return out.splitlines()[0].strip()
+    if shutil.which("rpm"):
+        for package in package_names:
+            ok, out = run_command(["rpm", "-q", "--qf", "%{VERSION}", package], timeout=2.5)
+            if ok and out and "not installed" not in out.lower():
+                return out.splitlines()[0].strip()
+    return ""
 
 
 def desktop_version() -> str:
     desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or "").strip()
-    parts = []
+    if not desktop:
+        for props in _graphical_login_sessions():
+            desktop = (props.get("Desktop") or "").strip()
+            if desktop:
+                break
+
+    desktop_norm = desktop.replace(":", "/").strip()
+    parts: list[str] = []
+
     ok, out = run_command(["plasmashell", "--version"], timeout=3)
     if ok and out:
         parts.append(out.replace("plasmashell", "Plasma").strip())
+
+    if not parts:
+        version = _package_version(["plasma-workspace", "plasma6-workspace"])
+        if version:
+            parts.append(f"KDE Plasma {version}")
+
     ok, out = run_command(["gnome-shell", "--version"], timeout=3)
     if ok and out and not parts:
         parts.append(out.strip())
-    if desktop and not any(desktop.lower() in p.lower() for p in parts):
-        parts.append(desktop.replace(":", "/"))
+
+    if not parts:
+        version = _package_version(["gnome-shell"])
+        if version:
+            parts.append(f"GNOME Shell {version}")
+
+    if not parts and shutil.which("pgrep"):
+        ok, _ = run_command(["pgrep", "-x", "plasmashell"], timeout=2)
+        if ok:
+            parts.append("KDE Plasma")
+        else:
+            ok, _ = run_command(["pgrep", "-x", "gnome-shell"], timeout=2)
+            if ok:
+                parts.append("GNOME Shell")
+
+    if desktop_norm:
+        canonical = desktop_norm.replace("KDE", "KDE Plasma") if desktop_norm.upper() == "KDE" else desktop_norm
+        if not any(canonical.lower() in p.lower() or desktop_norm.lower() in p.lower() for p in parts):
+            parts.append(canonical)
+
     return " · ".join(parts) if parts else "--"
 
 
@@ -1958,122 +2133,85 @@ def memory_total() -> str:
     return "--"
 
 
-def updates_available() -> tuple[str, str]:
-    # checkupdates exits rc=2 when there is nothing to update (man checkupdates).
-    # Treat both rc=0 and rc=2 as "command succeeded, count is len(stdout)".
-    if shutil.which("checkupdates"):
-        try:
-            proc = subprocess.run(
-                ["checkupdates"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=12,
-                check=False,
-                env=SAFE_SUBPROCESS_ENV,
-            )
-            if proc.returncode in (0, 2):
-                lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
-                return str(len(lines)), "checkupdates"
-        except Exception:
-            pass
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text or "")
 
-    # pacman -Qu exits rc=1 when nothing is upgradable.
-    if shutil.which("pacman"):
-        try:
-            proc = subprocess.run(
-                ["pacman", "-Qu"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=8,
-                check=False,
-                env=SAFE_SUBPROCESS_ENV,
-            )
-            if proc.returncode in (0, 1):
-                lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
-                return str(len(lines)), "pacman -Qu"
-        except Exception:
-            pass
+
+def _nonempty_lines(text: str) -> list[str]:
+    return [line.strip() for line in _strip_ansi(text).splitlines() if line.strip()]
+
+
+def updates_available() -> tuple[str, str]:
+    """Return the number of package updates and the command used.
+
+    On Arch/CachyOS, `checkupdates` is the reliable source because it refreshes
+    a temporary sync database without touching the real pacman database.  The
+    older `pacman -Qu` fallback can legitimately report 0 when the real sync DB
+    is stale, so we only use that zero-count result when checkupdates is not
+    installed at all.  This avoids showing a misleading 0 on systems where the
+    update notifier knows about pending updates.
+    """
+    checkupdates_path = resolve_command("checkupdates")
+    if checkupdates_path:
+        env = {
+            **SAFE_SUBPROCESS_ENV,
+            "LC_ALL": "C",
+            "LANG": "C",
+            "CHECKUPDATES_DB": str(OUT_DIR / "checkupdates-db"),
+        }
+        proc = run_process(["checkupdates"], timeout=35, env=env)
+        if proc is not None:
+            lines = _nonempty_lines(proc.stdout or "")
+            if lines:
+                return str(len(lines)), "checkupdates"
+            if proc.returncode in (0, 2):
+                return "0", "checkupdates"
+
+            # If checkupdates failed, do not silently turn that into a false
+            # zero via pacman -Qu.  We still allow a non-zero pacman fallback
+            # below, but otherwise report unknown.
+            pacman_proc = run_process(["pacman", "-Qu"], timeout=12, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+            if pacman_proc is not None:
+                pacman_lines = _nonempty_lines(pacman_proc.stdout or "")
+                if pacman_lines:
+                    return str(len(pacman_lines)), "pacman -Qu"
+            return "--", "checkupdates failed"
+
+    # Arch/CachyOS fallback when pacman-contrib/checkupdates is not installed.
+    proc = run_process(["pacman", "-Qu"], timeout=12, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is not None and proc.returncode in (0, 1):
+        lines = _nonempty_lines(proc.stdout or "")
+        return str(len(lines)), "pacman -Qu"
 
     # apt list --upgradable is localized. Force the C locale so the filter
     # word "upgradable" actually appears, otherwise a German Ubuntu shows 0.
-    if shutil.which("apt"):
-        try:
-            proc = subprocess.run(
-                ["apt", "list", "--upgradable"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=12,
-                check=False,
-                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
-            )
-            if proc.returncode == 0:
-                out = proc.stdout or ""
-                lines = [line for line in out.splitlines() if "/" in line and "upgradable" in line]
-                return str(len(lines)), "apt"
-        except Exception:
-            pass
+    proc = run_process(["apt", "list", "--upgradable"], timeout=18, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is not None and proc.returncode == 0:
+        lines = [line for line in _nonempty_lines(proc.stdout or "") if "/" in line and "upgradable" in line]
+        return str(len(lines)), "apt"
 
     # Fedora / RHEL / openSUSE-RPM family. dnf check-update exits 100 when
-    # updates are available, 0 when none, anything else is a real error.
-    # `dnf -q` (quiet) avoids the progress bar; we still parse stdout
-    # for lines that look like NEVRA package rows.
-    if shutil.which("dnf"):
-        try:
-            proc = subprocess.run(
-                ["dnf", "-q", "--cacheonly", "check-update"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=20,
-                check=False,
-                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
-            )
-            if proc.returncode in (0, 100):
-                out = proc.stdout or ""
-                # A package row has three whitespace-separated columns and
-                # does not start with whitespace or "Obsoleting"/"Last metadata".
-                lines = []
-                for line in out.splitlines():
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    if stripped.startswith(("Obsoleting", "Last metadata", "Security")):
-                        continue
-                    # Heuristic: real rows have at least 3 columns and the
-                    # first column does not contain a slash.
-                    parts = stripped.split()
-                    if len(parts) >= 3 and "/" not in parts[0]:
-                        lines.append(stripped)
-                return str(len(lines)), "dnf"
-        except Exception:
-            pass
+    # updates are available, 0 when none.  --cacheonly avoids heavy metadata
+    # refreshes, so the result follows the locally cached metadata freshness.
+    proc = run_process(["dnf", "-q", "--cacheonly", "check-update"], timeout=25, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is not None and proc.returncode in (0, 100):
+        lines = []
+        for line in _nonempty_lines(proc.stdout or ""):
+            if line.startswith(("Obsoleting", "Last metadata", "Security")):
+                continue
+            parts = line.split()
+            if len(parts) >= 3 and "/" not in parts[0]:
+                lines.append(line)
+        return str(len(lines)), "dnf"
 
-    # openSUSE / SUSE: zypper. `--non-interactive list-updates` returns
-    # status 0 when nothing changes too, and the data rows start with "v |".
-    if shutil.which("zypper"):
-        try:
-            proc = subprocess.run(
-                ["zypper", "--non-interactive", "-q", "list-updates"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=20,
-                check=False,
-                env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"},
-            )
-            if proc.returncode == 0:
-                out = proc.stdout or ""
-                lines = [line for line in out.splitlines()
-                         if line.startswith("v |") or line.startswith("v  |")]
-                return str(len(lines)), "zypper"
-        except Exception:
-            pass
+    # openSUSE / SUSE: zypper. `--non-interactive list-updates` returns status
+    # 0 when nothing changes too, and the data rows start with "v |".
+    proc = run_process(["zypper", "--non-interactive", "-q", "list-updates"], timeout=25, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is not None and proc.returncode == 0:
+        lines = [line for line in _nonempty_lines(proc.stdout or "") if line.startswith("v |") or line.startswith("v  |")]
+        return str(len(lines)), "zypper"
 
     return "--", ""
-
 
 
 def first_ipv4(value: str) -> str:
@@ -2489,11 +2627,31 @@ def build_cache(config: dict | None = None) -> dict:
 
     return data
 
+
+def acquire_cache_lock():
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = OUT_DIR / ".refresh.lock"
+    handle = lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle
+
 if __name__ == "__main__":
-    ensure_config()
-    config = load_config()
-
-    if cache_is_fresh(config):
+    lock_handle = acquire_cache_lock()
+    if lock_handle is None:
         raise SystemExit(0)
+    try:
+        ensure_config()
+        config = load_config()
 
-    build_cache(config)
+        if cache_is_fresh(config):
+            raise SystemExit(0)
+
+        build_cache(config)
+    finally:
+        lock_handle.close()

@@ -93,13 +93,19 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.0.11" date="2026-05-19">
+      <description>
+        <p>Fixes package-update counting on Arch/CachyOS systems and prevents overlapping cache refreshes.</p>
+        <p xml:lang="de">Korrigiert die Zählung verfügbarer Paket-Updates auf Arch/CachyOS-Systemen und verhindert überlappende Cache-Aktualisierungen.</p>
+      </description>
+    </release>
     <release version="2.0.9" date="2026-05-18">
       <description>
         <p>Improves the active warning notice with clearer German and English wording and a more visible warning banner.</p>
         <p xml:lang="de">Verbessert den Hinweis bei aktiven Warnmeldungen mit klarerer deutscher und englischer Formulierung und einem besser sichtbaren Warnbanner.</p>
       </description>
     </release>
-    <release version="2.0.9" date="2026-05-18">
+    <release version="2.0.8" date="2026-05-18">
       <description>
         <p>Adds a lightweight local cache polling timer so the visible dashboard stays in sync with background cache refreshes.</p>
         <p xml:lang="de">Ergänzt einen leichten lokalen Cache-Polling-Timer, damit das sichtbare Dashboard mit Hintergrund-Aktualisierungen des Caches synchron bleibt.</p>

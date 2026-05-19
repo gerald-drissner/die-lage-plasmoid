@@ -1,10 +1,11 @@
 # Die Lage
 
-## v2.0.9 highlights
+## v2.0.11 highlights
 
-- Improves automatic display refresh reliability.
-- The widget now re-reads the local cache every 30 seconds, so background updates become visible without opening the settings first.
-- This does not increase external network calls; it only reads the local helper cache.
+- Fixes package-update counting on Arch/CachyOS systems, especially under systemd user services.
+- Uses a safer command-resolution path for Linux helper tools.
+- Prevents overlapping cache refreshes when manual refresh and the background timer run at the same time.
+- Keeps the v2 service/settings workflow, configurable helper port, boot-refresh controls, cache cleanup, tool checks and local cache display refresh.
 
 ## Installation note
 

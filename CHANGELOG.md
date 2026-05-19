@@ -1,3 +1,13 @@
+# Die Lage Changelog
+
+## v2.0.11
+
+- Fixed package-update counting on Arch/CachyOS systems by resolving helper commands more reliably under systemd user services and preferring `checkupdates` over stale `pacman -Qu` zero results.
+- Added a cache-refresh file lock so manual refreshes and systemd timer refreshes do not run the cache builder at the same time.
+- Made oversized HTTP responses fail explicitly instead of silently parsing truncated data.
+- Tightened one dynamic prayer-times label to render as plain text.
+- Updated KDE Store text and release metadata for the new version.
+
 # Changelog
 
 ## v2.0.9
