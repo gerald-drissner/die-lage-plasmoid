@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
              'show_indices': True,
              'show_stocks': True},
  'fetch_interval_minutes': 10,
+ 'system_interval_minutes': 3,
  'local_server_port': 8765,
  'boot_refresh_enabled': True,
  'boot_refresh_delay_seconds': 120,
@@ -360,6 +361,7 @@ def merge_config(data: dict) -> dict:
     data.setdefault("prayer", copy.deepcopy(defaults["prayer"]))
     data.setdefault("system", copy.deepcopy(defaults.get("system", {"show_info": True, "show_network": True, "show_public_network": False, "show_vpn": True, "vpn_label": "", "show_updates": True})))
     data["fetch_interval_minutes"] = clamp_int(data.get("fetch_interval_minutes", defaults["fetch_interval_minutes"]), defaults["fetch_interval_minutes"], 1, 1440)
+    data["system_interval_minutes"] = clamp_int(data.get("system_interval_minutes", defaults.get("system_interval_minutes", 3)), defaults.get("system_interval_minutes", 3), 1, 1440)
     data["local_server_port"] = local_server_port(data)
     data["boot_refresh_enabled"] = boot_refresh_enabled(data)
     data["boot_refresh_delay_seconds"] = boot_refresh_delay_seconds(data)
@@ -494,7 +496,7 @@ def read_json_post_body(handler) -> dict:
 
 
 def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
-    request_headers = {"User-Agent": "DieLage/2.0.11 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers = {"User-Agent": "DieLage/2.0.13 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
     request_headers.update(headers)
     req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -595,7 +597,7 @@ def tool_status() -> dict:
 
     return {
         "ok": True,
-        "version": "2.0.11",
+        "version": "2.0.13",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -706,7 +708,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "2.0.11", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "version": "2.0.13", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":

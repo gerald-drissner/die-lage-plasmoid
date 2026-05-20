@@ -1,12 +1,11 @@
-# Die Lage
+# Die Lage v2.0.13
 
-## v2.0.11 highlights
+## v2.0.13 highlights
 
-- Fixes package-update counting on Arch/CachyOS systems, especially under systemd user services.
-- Uses a safer command-resolution path for Linux helper tools.
-- Prevents overlapping cache refreshes when manual refresh and the background timer run at the same time.
-- Keeps the v2 service/settings workflow, configurable helper port, boot-refresh controls, cache cleanup, tool checks and local cache display refresh.
+Die Lage v2.0.13 separates the fast System-block refresh interval from the main data interval. VPN, DNS, public-IP and update-count data can now refresh more frequently without refetching all RSS feeds, weather, warning, prayer-time and market endpoints.
 
-## Installation note
+Upload files:
 
-The KDE Store plasmoid package installs the visible widget. The full installer ZIP is still needed for the local Python helper, cache refresh timers and systemd user services.
+- Main package: `die-lage-2.0.13.plasmoid`
+- Full/helper installer ZIP: `die-lage-v2.0.13.zip`
+

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-VERSION="2.0.11"
+VERSION="2.0.13"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
@@ -9,11 +9,11 @@ python3 -m json.tool files/plasmoid/metadata.json >/dev/null
 python3 -m py_compile files/bin/dielage-cache.py files/bin/dielage-server.py
 bash -n install.sh uninstall.sh emergency-clean-dielage.sh
 
-grep -q '"Version": "2.0.11"' files/plasmoid/metadata.json
-grep -q 'readonly property string appVersion: "2.0.11"' files/plasmoid/contents/ui/main.qml
-grep -q '"version": "2.0.11"' files/bin/dielage-server.py
-grep -q 'DieLage/2.0.11' files/bin/dielage-cache.py
-grep -q '<release version="2.0.11" date=' files/plasmoid/metadata.appdata.xml
+grep -q '"Version": "2.0.13"' files/plasmoid/metadata.json
+grep -q 'readonly property string appVersion: "2.0.13"' files/plasmoid/contents/ui/main.qml
+grep -q '"version": "2.0.13"' files/bin/dielage-server.py
+grep -q 'DieLage/2.0.13' files/bin/dielage-cache.py
+grep -q '<release version="2.0.13" date=' files/plasmoid/metadata.appdata.xml
 
 rm -f "die-lage-${VERSION}.plasmoid" "die-lage-v${VERSION}.zip" "die-lage-latest.zip"
 rm -rf /tmp/die-lage-build-v${VERSION} /tmp/die-lage-latest-v${VERSION}

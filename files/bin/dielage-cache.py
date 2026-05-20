@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
              'show_stocks': True,
              'stocks': []},
  'fetch_interval_minutes': 10,
+ 'system_interval_minutes': 3,
  'local_server_port': 8765,
  'boot_refresh_enabled': True,
  'boot_refresh_delay_seconds': 120,
@@ -128,7 +129,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.11 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.13 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": SAFE_SUBPROCESS_PATH}
@@ -195,21 +196,58 @@ def clamp_int(value, fallback: int, min_value: int, max_value: int) -> int:
 
     return max(min_value, min(max_value, n))
 
+def cache_timestamp_fallback() -> float:
+    try:
+        return float(CACHE.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+def refresh_plan(config: dict, old: dict | None = None) -> dict[str, bool | float]:
+    """Decide which parts of the cache need rebuilding.
+
+    The main interval controls network-heavy dashboard data such as RSS,
+    weather, warnings, prayer times and markets.  The system interval controls
+    local system, VPN, DNS, public-network and update-count data.  Keeping them
+    separate lets the System block stay current without refetching every feed
+    or market endpoint every few minutes.
+    """
+    if "--force" in sys.argv:
+        return {"main": True, "system": True, "now": time.time()}
+
+    if not CACHE.exists():
+        return {"main": True, "system": True, "now": time.time()}
+
+    now = time.time()
+    main_minutes = clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440)
+    system_minutes = clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440)
+
+    refresh = {}
+    if isinstance(old, dict):
+        refresh = old.get("_refresh", {}) if isinstance(old.get("_refresh", {}), dict) else {}
+
+    fallback = cache_timestamp_fallback()
+    try:
+        main_last = float(refresh.get("main", fallback) or fallback)
+    except Exception:
+        main_last = fallback
+    try:
+        system_last = float(refresh.get("system", fallback) or fallback)
+    except Exception:
+        system_last = fallback
+
+    return {
+        "main": (now - main_last) >= main_minutes * 60,
+        "system": (now - system_last) >= system_minutes * 60,
+        "now": now,
+    }
+
 def cache_is_fresh(config: dict) -> bool:
     if "--force" in sys.argv:
         return False
 
-    if not CACHE.exists():
-        return False
-
-    minutes = clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440)
-
-    try:
-        age = time.time() - CACHE.stat().st_mtime
-    except Exception:
-        return False
-
-    return age < minutes * 60
+    old = load_old() if CACHE.exists() else {}
+    plan = refresh_plan(config, old)
+    return not bool(plan.get("main")) and not bool(plan.get("system"))
 
 def load_config() -> dict:
     ensure_config()
@@ -226,6 +264,9 @@ def load_config() -> dict:
     data.setdefault("prayer", copy.deepcopy(DEFAULT_CONFIG["prayer"]))
     data.setdefault("system", copy.deepcopy(DEFAULT_CONFIG["system"]))
     data.setdefault("fetch_interval_minutes", DEFAULT_CONFIG["fetch_interval_minutes"])
+    data.setdefault("system_interval_minutes", DEFAULT_CONFIG.get("system_interval_minutes", 3))
+    data["fetch_interval_minutes"] = clamp_int(data.get("fetch_interval_minutes", DEFAULT_CONFIG.get("fetch_interval_minutes", 10)), DEFAULT_CONFIG.get("fetch_interval_minutes", 10), 1, 1440)
+    data["system_interval_minutes"] = clamp_int(data.get("system_interval_minutes", DEFAULT_CONFIG.get("system_interval_minutes", 3)), DEFAULT_CONFIG.get("system_interval_minutes", 3), 1, 1440)
     data.setdefault("local_server_port", DEFAULT_CONFIG.get("local_server_port", 8765))
     data.setdefault("boot_refresh_enabled", DEFAULT_CONFIG.get("boot_refresh_enabled", True))
     data.setdefault("boot_refresh_delay_seconds", DEFAULT_CONFIG.get("boot_refresh_delay_seconds", 120))
@@ -2141,76 +2182,214 @@ def _nonempty_lines(text: str) -> list[str]:
     return [line.strip() for line in _strip_ansi(text).splitlines() if line.strip()]
 
 
-def updates_available() -> tuple[str, str]:
-    """Return the number of package updates and the command used.
+def _count_command_lines(proc: subprocess.CompletedProcess | None) -> int | None:
+    if proc is None:
+        return None
+    return len(_nonempty_lines(proc.stdout or ""))
 
-    On Arch/CachyOS, `checkupdates` is the reliable source because it refreshes
-    a temporary sync database without touching the real pacman database.  The
-    older `pacman -Qu` fallback can legitimately report 0 when the real sync DB
-    is stale, so we only use that zero-count result when checkupdates is not
-    installed at all.  This avoids showing a misleading 0 on systems where the
-    update notifier knows about pending updates.
+
+def _count_pkcon_updates() -> tuple[int, str] | None:
+    """Use PackageKit as a cross-distro fallback.
+
+    KDE Discover commonly talks to PackageKit, so this catches many systems
+    where native package-manager CLIs are unavailable, sandboxed, or stale.
+    We parse only package rows and ignore progress/status chatter.
     """
+    proc = run_process(["pkcon", "get-updates"], timeout=45, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is None:
+        return None
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    lines = _nonempty_lines(text)
+    count = 0
+    for line in lines:
+        low = line.lower()
+        if not line or low.startswith((
+            "getting", "loading", "querying", "refreshing", "finished", "waiting", "starting",
+            "available updates", "there are no updates", "no packages require updating",
+        )):
+            continue
+        # PackageKit rows normally contain package IDs like name;version;arch;repo
+        # and often start with an update severity/status word.
+        if ";" in line and not low.startswith(("transaction", "percentage", "status")):
+            count += 1
+            continue
+        if re.match(r"^(low|normal|important|security|bugfix|enhancement|blocked)\s+\S+;", line, re.I):
+            count += 1
+    if count:
+        return count, "PackageKit"
+    if proc.returncode == 0:
+        return 0, "PackageKit"
+    return None
+
+
+def _count_flatpak_updates() -> tuple[int, str] | None:
+    # Flatpak is not a system package manager, but KDE Discover often shows
+    # Flatpak updates next to system updates.  Use it only as an additive
+    # optional source when available and fast enough.
+    proc = run_process(["flatpak", "remote-ls", "--updates"], timeout=20, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    if proc is None or proc.returncode != 0:
+        return None
+    lines = _nonempty_lines(proc.stdout or "")
+    # Header line usually contains Application ID / Version / Branch.
+    data_lines = [line for line in lines if not line.lower().startswith(("application id", "ref", "name"))]
+    return len(data_lines), "flatpak"
+
+
+def _count_pacman_updates(checkupdates_failed: bool = False) -> tuple[int, str] | None:
+    # Arch, CachyOS, EndeavourOS, Manjaro and related systems.
     checkupdates_path = resolve_command("checkupdates")
     if checkupdates_path:
+        # Use a dedicated cache DB so checkupdates does not touch the real
+        # pacman sync database.  This is the official pacman-contrib pattern.
+        db_path = OUT_DIR / "checkupdates-db"
+        db_path.mkdir(parents=True, exist_ok=True)
         env = {
             **SAFE_SUBPROCESS_ENV,
             "LC_ALL": "C",
             "LANG": "C",
-            "CHECKUPDATES_DB": str(OUT_DIR / "checkupdates-db"),
+            "CHECKUPDATES_DB": str(db_path),
         }
-        proc = run_process(["checkupdates"], timeout=35, env=env)
+        proc = run_process(["checkupdates"], timeout=55, env=env)
         if proc is not None:
             lines = _nonempty_lines(proc.stdout or "")
             if lines:
-                return str(len(lines)), "checkupdates"
+                return len(lines), "checkupdates"
+            # pacman-contrib uses 2 for "no updates" on several versions.
             if proc.returncode in (0, 2):
-                return "0", "checkupdates"
+                return 0, "checkupdates"
+            checkupdates_failed = True
 
-            # If checkupdates failed, do not silently turn that into a false
-            # zero via pacman -Qu.  We still allow a non-zero pacman fallback
-            # below, but otherwise report unknown.
-            pacman_proc = run_process(["pacman", "-Qu"], timeout=12, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
-            if pacman_proc is not None:
-                pacman_lines = _nonempty_lines(pacman_proc.stdout or "")
-                if pacman_lines:
-                    return str(len(pacman_lines)), "pacman -Qu"
-            return "--", "checkupdates failed"
-
-    # Arch/CachyOS fallback when pacman-contrib/checkupdates is not installed.
-    proc = run_process(["pacman", "-Qu"], timeout=12, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    # Fallback: local pacman database.  This can be stale, but it is still a
+    # useful signal and avoids showing "--" when checkupdates fails under a
+    # user systemd service.  If it reports real packages, trust the count.
+    proc = run_process(["pacman", "-Qu"], timeout=15, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
     if proc is not None and proc.returncode in (0, 1):
         lines = _nonempty_lines(proc.stdout or "")
-        return str(len(lines)), "pacman -Qu"
+        if lines:
+            return len(lines), "pacman -Qu"
+        if not checkupdates_failed:
+            return 0, "pacman -Qu"
 
-    # apt list --upgradable is localized. Force the C locale so the filter
-    # word "upgradable" actually appears, otherwise a German Ubuntu shows 0.
-    proc = run_process(["apt", "list", "--upgradable"], timeout=18, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+    # AUR/helper fallbacks.  These are intentionally after pacman/checkupdates,
+    # because users usually expect the main number to reflect regular package
+    # updates first.  If only an AUR helper knows about updates, showing that
+    # count is still more useful than "--".
+    for helper in ("paru", "yay"):
+        proc = run_process([helper, "-Qua"], timeout=35, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+        if proc is not None and proc.returncode in (0, 1):
+            lines = _nonempty_lines(proc.stdout or "")
+            if lines:
+                return len(lines), helper
+    return None
+
+
+def _count_apt_updates() -> tuple[int, str] | None:
+    # Debian, Ubuntu, Kubuntu, KDE neon and derivatives.  `apt-get -s upgrade`
+    # is more machine-readable than localized `apt list --upgradable` output.
+    env = {**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"}
+    proc = run_process(["apt-get", "-s", "upgrade"], timeout=30, env=env)
     if proc is not None and proc.returncode == 0:
-        lines = [line for line in _nonempty_lines(proc.stdout or "") if "/" in line and "upgradable" in line]
-        return str(len(lines)), "apt"
+        lines = [line for line in _nonempty_lines(proc.stdout or "") if line.startswith("Inst ")]
+        return len(lines), "apt-get"
 
-    # Fedora / RHEL / openSUSE-RPM family. dnf check-update exits 100 when
-    # updates are available, 0 when none.  --cacheonly avoids heavy metadata
-    # refreshes, so the result follows the locally cached metadata freshness.
-    proc = run_process(["dnf", "-q", "--cacheonly", "check-update"], timeout=25, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
-    if proc is not None and proc.returncode in (0, 100):
+    proc = run_process(["apt", "list", "--upgradable"], timeout=25, env=env)
+    if proc is not None and proc.returncode == 0:
+        lines = [line for line in _nonempty_lines(proc.stdout or "") if "/" in line and "upgradable" in line.lower()]
+        return len(lines), "apt"
+    return None
+
+
+def _count_dnf_updates() -> tuple[int, str] | None:
+    env = {**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"}
+    # Fedora 41+ / dnf5.  Exit code 100 means updates available.
+    for args, source in ((["dnf5", "-q", "check-upgrade"], "dnf5"), (["dnf", "-q", "check-update"], "dnf")):
+        proc = run_process(args, timeout=45, env=env)
+        if proc is None or proc.returncode not in (0, 100):
+            continue
         lines = []
         for line in _nonempty_lines(proc.stdout or ""):
-            if line.startswith(("Obsoleting", "Last metadata", "Security")):
+            low = line.lower()
+            if low.startswith(("last metadata", "metadata", "obsoleting", "security:")):
                 continue
             parts = line.split()
-            if len(parts) >= 3 and "/" not in parts[0]:
+            # dnf rows usually have: name.arch version repo
+            if len(parts) >= 3 and re.search(r"\.(noarch|x86_64|aarch64|i686|src)$", parts[0]):
                 lines.append(line)
-        return str(len(lines)), "dnf"
+        return len(lines), source
+    return None
 
-    # openSUSE / SUSE: zypper. `--non-interactive list-updates` returns status
-    # 0 when nothing changes too, and the data rows start with "v |".
-    proc = run_process(["zypper", "--non-interactive", "-q", "list-updates"], timeout=25, env={**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"})
+
+def _count_zypper_updates() -> tuple[int, str] | None:
+    # openSUSE Tumbleweed / Leap.  Use the table output and count package rows.
+    env = {**SAFE_SUBPROCESS_ENV, "LC_ALL": "C", "LANG": "C"}
+    proc = run_process(["zypper", "--non-interactive", "-q", "list-updates"], timeout=35, env=env)
     if proc is not None and proc.returncode == 0:
-        lines = [line for line in _nonempty_lines(proc.stdout or "") if line.startswith("v |") or line.startswith("v  |")]
-        return str(len(lines)), "zypper"
+        lines = []
+        for line in _nonempty_lines(proc.stdout or ""):
+            if re.match(r"^v\s*\|", line) or re.match(r"^package\s*\|", line, re.I):
+                lines.append(line)
+        return len(lines), "zypper"
+    return None
 
+
+def updates_available() -> tuple[str, str]:
+    """Return the number of available updates and the source used.
+
+    The detection is deliberately multi-layered.  Different KDE Plasma distros
+    expose update information through different tools: Arch-like systems prefer
+    checkupdates/pacman, Debian-like systems use apt, Fedora uses dnf/dnf5,
+    openSUSE uses zypper, and KDE Discover often uses PackageKit.  We try the
+    native package manager first, then PackageKit as a broad desktop fallback.
+    """
+    counters: list[tuple[int, str]] = []
+
+    # Native package managers.  These are cheap enough and most precise for the
+    # user's base system.  Each helper returns None when the tool is absent or
+    # unusable, and (0, source) only when it could confidently check.
+    for checker in (_count_pacman_updates, _count_apt_updates, _count_dnf_updates, _count_zypper_updates):
+        try:
+            result = checker()
+        except Exception:
+            result = None
+        if result is not None:
+            count, source = result
+            # If a native tool found updates, return immediately.  If it found
+            # zero, keep it as a fallback but still let PackageKit potentially
+            # report updates known to KDE Discover.
+            if count > 0:
+                flatpak = _count_flatpak_updates()
+                if flatpak and flatpak[0] > 0:
+                    return str(count + flatpak[0]), f"{source}+flatpak"
+                return str(count), source
+            counters.append((count, source))
+
+    # Desktop-level fallback used by KDE Discover on many distributions.
+    try:
+        pk = _count_pkcon_updates()
+    except Exception:
+        pk = None
+    if pk is not None:
+        count, source = pk
+        if count > 0:
+            flatpak = _count_flatpak_updates()
+            if flatpak and flatpak[0] > 0:
+                return str(count + flatpak[0]), f"{source}+flatpak"
+            return str(count), source
+        counters.append((count, source))
+
+    # Flatpak-only fallback.  This keeps the field useful on machines where
+    # Discover mainly manages Flatpak apps.
+    try:
+        flatpak = _count_flatpak_updates()
+    except Exception:
+        flatpak = None
+    if flatpak is not None and flatpak[0] > 0:
+        return str(flatpak[0]), flatpak[1]
+
+    # If any tool confidently checked and found zero, show 0.  Otherwise the
+    # update state is genuinely unknown.
+    if counters:
+        return "0", "+".join(source for _, source in counters[:2])
     return "--", ""
 
 
@@ -2560,16 +2739,28 @@ def empty_block(name: str) -> dict:
         "location": name,
     }
 
+def existing_block(old: dict, key: str, name: str) -> dict:
+    block = old.get(key) if isinstance(old, dict) else None
+    if isinstance(block, dict):
+        return block
+    return empty_block(name)
+
 def build_cache(config: dict | None = None) -> dict:
     if config is None:
         ensure_config()
         config = load_config()
     old = load_old()
+    plan = refresh_plan(config, old)
+    refresh_main = bool(plan.get("main"))
+    refresh_system = bool(plan.get("system"))
+    now_ts = float(plan.get("now", time.time()))
 
-    feeds = []
-    errors = []
+    feeds = old.get("feeds", []) if isinstance(old.get("feeds", []), list) else []
+    errors = old.get("errors", []) if isinstance(old.get("errors", []), list) else []
 
-    if block_enabled(config, "news"):
+    if block_enabled(config, "news") and refresh_main:
+        feeds = []
+        errors = []
         for feed in config.get("feeds", []):
             name = feed.get("name", "Feed")
             url = feed.get("url", "")
@@ -2591,15 +2782,18 @@ def build_cache(config: dict | None = None) -> dict:
                 "url": url,
                 "items": items,
             })
+    elif not block_enabled(config, "news"):
+        feeds = []
+        errors = []
 
     data = {
         "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         "language": ui_language(config),
-        "nina": fetch_nina(old, config) if block_enabled(config, "nina") else empty_block("Warnmeldungen"),
-        "weather": fetch_weather(old, config) if block_enabled(config, "weather") else empty_block("Wetter"),
-        "prayer": fetch_prayer(old, config) if block_enabled(config, "prayer") else empty_block("Islamische Gebetszeiten"),
-        "markets": fetch_markets(old, config) if block_enabled(config, "markets") else empty_block("Märkte"),
-        "system": fetch_system_info(old, config) if block_enabled(config, "system") else empty_block("System"),
+        "nina": fetch_nina(old, config) if block_enabled(config, "nina") and refresh_main else (existing_block(old, "nina", "Warnmeldungen") if block_enabled(config, "nina") else empty_block("Warnmeldungen")),
+        "weather": fetch_weather(old, config) if block_enabled(config, "weather") and refresh_main else (existing_block(old, "weather", "Wetter") if block_enabled(config, "weather") else empty_block("Wetter")),
+        "prayer": fetch_prayer(old, config) if block_enabled(config, "prayer") and refresh_main else (existing_block(old, "prayer", "Islamische Gebetszeiten") if block_enabled(config, "prayer") else empty_block("Islamische Gebetszeiten")),
+        "markets": fetch_markets(old, config) if block_enabled(config, "markets") and refresh_main else (existing_block(old, "markets", "Märkte") if block_enabled(config, "markets") else empty_block("Märkte")),
+        "system": fetch_system_info(old, config) if block_enabled(config, "system") and refresh_system else (existing_block(old, "system", "System") if block_enabled(config, "system") else empty_block("System")),
         "feeds": feeds,
         "errors": errors,
         "blocks": {
@@ -2609,6 +2803,13 @@ def build_cache(config: dict | None = None) -> dict:
             "markets": block_enabled(config, "markets"),
             "system": block_enabled(config, "system"),
             "news": block_enabled(config, "news"),
+        },
+        "_refresh": {
+            "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
+            "system": now_ts if refresh_system else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
+            "version": "2.0.13",
+            "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
+            "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },
     }
 

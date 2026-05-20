@@ -1,6 +1,20 @@
 # Die Lage Changelog
 
-## v2.0.11
+## v2.0.13
+
+- Splits the cache refresh cadence into a main data interval and a separate System interval.
+- The main interval continues to refresh RSS/news, warnings, weather, prayer times and markets.
+- The new System interval refreshes Linux system, network, VPN, DNS, public-IP and update-count data more frequently without refetching all external feeds.
+- Adds a System-interval setting in the System tab. Default: 3 minutes.
+- Preserves old cached main-data blocks when only the System interval is due.
+
+## v2.0.13
+
+- Makes System-block update counting more robust across Arch/CachyOS/EndeavourOS, Debian/Ubuntu/KDE neon, Fedora/dnf5, openSUSE/zypper, PackageKit and Flatpak setups.
+- Avoids returning unknown when one update tool fails but another desktop/package-manager backend can still report pending updates.
+- Keeps the v2.0.11 cache-lock and HTTP-response hardening.
+
+## v2.0.13
 
 - Fixed package-update counting on Arch/CachyOS systems by resolving helper commands more reliably under systemd user services and preferring `checkupdates` over stale `pacman -Qu` zero results.
 - Added a cache-refresh file lock so manual refreshes and systemd timer refreshes do not run the cache builder at the same time.

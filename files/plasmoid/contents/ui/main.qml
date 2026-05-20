@@ -99,6 +99,7 @@ PlasmoidItem {
     property bool newsFontSyncInProgress: false
     property string uiLanguage: "de"
     property string fetchIntervalMinutes: "10"
+    property string systemIntervalMinutes: "3"
     property bool bootRefreshEnabled: true
     property string bootRefreshDelaySeconds: "120"
 
@@ -146,7 +147,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.11"
+    readonly property string appVersion: "2.0.13"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -733,7 +734,10 @@ PlasmoidItem {
             "separatorStrong": "Stronger separators",
             "separatorHelp": "Controls the divider lines between the main dashboard blocks. Feed dividers inside the news block stay visible for readability.",
             "fontSize": "Font size",
-            "fetchInterval": "Fetch interval in minutes",
+            "fetchInterval": "Main data interval in minutes",
+            "fetchIntervalHelp": "Refreshes news, warnings, weather, prayer times and markets. System data has its own shorter interval below.",
+            "systemInterval": "System interval in minutes",
+            "systemIntervalHelp": "Refreshes local system, network, VPN and update-count data. Default: 3 minutes. Static values such as CPU/GPU are cheap local reads and are refreshed with the same System pass.",
             "bootRefreshEnabled": "Run first refresh after login/reboot",
             "bootRefreshDelay": "Delay after login/reboot",
             "bootRefreshDelayHelp": "When enabled, Die Lage runs one forced refresh shortly after login/reboot. Default: 120 seconds. Increase this if Wi-Fi, VPN or the network starts slowly. Saving updates the systemd user boot timer for the next login/reboot.",
@@ -808,7 +812,7 @@ PlasmoidItem {
             "vpnLabelPlaceholder": "e.g. Mullvad, WARP, WG",
             "vpnLabelHelp": "Optional: if automatic detection cannot name your VPN, enter a short label here. The helper still tries to detect active VPN interfaces first.",
             "showSystemUpdates": "Show available updates",
-            "systemHelp": "Compact Linux system data. VPN detection checks local routes, active VPN interfaces and common tools such as NetworkManager, Mullvad, WARP and Tailscale. Public IP/ISP uses an external lookup and is off by default. Everything is cached until the next normal refresh.",
+            "systemHelp": "Compact Linux system data. VPN detection checks local routes, active VPN interfaces and common tools such as NetworkManager, Mullvad, WARP and Tailscale. Public IP/ISP uses an external lookup and is off by default. System data uses its own refresh interval, while news/weather/markets use the main interval.",
             "marketSettings": "Markets – currencies, indices and stocks",
             "marketSubblocks": "Market sections",
             "showCurrencies": "Show exchange rates",
@@ -974,7 +978,10 @@ PlasmoidItem {
             "separatorStrong": "Deutlichere Trennlinien",
             "separatorHelp": "Steuert die Linien zwischen den großen Dashboard-Blöcken. Trennlinien innerhalb der Nachrichten bleiben für die Lesbarkeit erhalten.",
             "fontSize": "Schriftgröße",
-            "fetchInterval": "Abruf-Intervall in Minuten",
+            "fetchInterval": "Abruf-Intervall für Hauptdaten in Minuten",
+            "fetchIntervalHelp": "Aktualisiert Nachrichten, Warnmeldungen, Wetter, Gebetszeiten und Märkte. Systemdaten haben unten ein eigenes kürzeres Intervall.",
+            "systemInterval": "System-Intervall in Minuten",
+            "systemIntervalHelp": "Aktualisiert lokale System-, Netzwerk-, VPN- und Update-Daten. Standard: 3 Minuten. Statische Werte wie CPU/GPU sind günstige lokale Abfragen und laufen im selben Systemdurchgang mit.",
             "bootRefreshEnabled": "Erste Aktualisierung nach Login/Neustart ausführen",
             "bootRefreshDelay": "Verzögerung nach Login/Neustart",
             "bootRefreshDelayHelp": "Wenn aktiv, führt Die Lage kurz nach Login/Neustart einen erzwungenen Datenabruf aus. Standard: 120 Sekunden. Erhöhen Sie den Wert, wenn WLAN, VPN oder Netzwerk langsam starten. Speichern aktualisiert den systemd-User-Boot-Timer für den nächsten Login/Neustart.",
@@ -1049,7 +1056,7 @@ PlasmoidItem {
             "vpnLabelPlaceholder": "z. B. Mullvad, WARP, WG",
             "vpnLabelHelp": "Optional: Wenn die automatische Erkennung Ihr VPN nicht benennen kann, tragen Sie hier ein kurzes Kürzel ein. Der Hintergrunddienst prüft trotzdem zuerst aktive VPN-Interfaces und Routen.",
             "showSystemUpdates": "Verfügbare Updates anzeigen",
-            "systemHelp": "Kompakte Linux-Systemdaten. Die VPN-Erkennung prüft lokale Routen, aktive VPN-Interfaces und gängige Werkzeuge wie NetworkManager, Mullvad, WARP und Tailscale. Öffentliche IP/ISP nutzt eine externe Abfrage und ist standardmäßig aus. Alles wird bis zum nächsten normalen Abruf zwischengespeichert.",
+            "systemHelp": "Kompakte Linux-Systemdaten. Die VPN-Erkennung prüft lokale Routen, aktive VPN-Interfaces und gängige Werkzeuge wie NetworkManager, Mullvad, WARP und Tailscale. Öffentliche IP/ISP nutzt eine externe Abfrage und ist standardmäßig aus. Systemdaten verwenden ein eigenes Aktualisierungsintervall; Nachrichten, Wetter und Märkte nutzen das Hauptintervall.",
             "marketSettings": "Märkte – Währungen, Indizes und Aktien",
             "marketSubblocks": "Marktbereiche",
             "showCurrencies": "Wechselkurse anzeigen",
@@ -1999,6 +2006,7 @@ PlasmoidItem {
         }
 
         root.fetchIntervalMinutes = String(data.fetch_interval_minutes || 10)
+        root.systemIntervalMinutes = String(data.system_interval_minutes || 3)
         root.localServerPort = String(data.local_server_port || 8765)
         root.bootRefreshEnabled = data.boot_refresh_enabled !== false
         root.bootRefreshDelaySeconds = String(data.boot_refresh_delay_seconds || 120)
@@ -2145,6 +2153,7 @@ PlasmoidItem {
                 "finnhub_api_key": root.finnhubApiKey.trim()
             },
             "fetch_interval_minutes": root.clampInt(root.fetchIntervalMinutes, 10, 1, 1440),
+            "system_interval_minutes": root.clampInt(root.systemIntervalMinutes, 3, 1, 1440),
             "local_server_port": clampedLocalServerPort,
             "boot_refresh_enabled": root.bootRefreshEnabled,
             "boot_refresh_delay_seconds": root.clampInt(root.bootRefreshDelaySeconds, 120, 10, 1800),
@@ -3232,6 +3241,16 @@ PlasmoidItem {
                                             inputMethodHints: Qt.ImhDigitsOnly
                                             onTextChanged: root.fetchIntervalMinutes = text
                                         }
+
+                                        PlasmaComponents3.Label {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("fetchIntervalHelp")
+                                            opacity: 0.68
+                                            font.pixelSize: Math.max(9, root.smallSize - 1)
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
                                     }
                                 }
 
@@ -3891,6 +3910,38 @@ PlasmoidItem {
                                     QQC2.CheckBox { text: root.t("showSystemPublicNetwork"); checked: root.showSystemPublicNetwork; font.pixelSize: root.smallSize; enabled: root.showSystem; onToggled: root.showSystemPublicNetwork = checked }
                                     QQC2.CheckBox { text: root.t("showSystemVpn"); checked: root.showSystemVpn; font.pixelSize: root.smallSize; enabled: root.showSystem; onToggled: root.showSystemVpn = checked }
                                     QQC2.CheckBox { text: root.t("showSystemUpdates"); checked: root.showSystemUpdates; font.pixelSize: root.smallSize; enabled: root.showSystem; onToggled: root.showSystemUpdates = checked }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    PlasmaComponents3.Label {
+                                        text: root.t("systemInterval")
+                                        font.pixelSize: root.smallSize
+                                    }
+
+                                    QQC2.TextField {
+                                        Layout.preferredWidth: 180
+                                        Layout.maximumWidth: 240
+                                        text: root.systemIntervalMinutes
+                                        font.pixelSize: root.smallSize
+                                        placeholderText: "3"
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        enabled: root.showSystem
+                                        onTextChanged: root.systemIntervalMinutes = text
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("systemIntervalHelp")
+                                        opacity: 0.68
+                                        font.pixelSize: root.smallSize
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
                                 }
 
                                 ColumnLayout {
