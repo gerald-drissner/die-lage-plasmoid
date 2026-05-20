@@ -155,7 +155,9 @@
     "panel_width": 24,
     "panel_middle_click_refresh": true,
     "prayer_upcoming_highlight": true,
-    "panel_popup_width": 600
+    "panel_popup_width": 600,
+    "prayer_upcoming_before_minutes": 45,
+    "prayer_now_after_minutes": 1
   },
   "blocks": {
     "weather": true,

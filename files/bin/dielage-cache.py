@@ -98,6 +98,8 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'panel_middle_click_refresh': True,
         'block_heading_icons': True,
         'prayer_upcoming_highlight': True,
+        'prayer_upcoming_before_minutes': 45,
+        'prayer_now_after_minutes': 1,
         'custom_title': '',
         'separator_style': 'subtle',
         'news_links_clickable': True,
@@ -129,7 +131,32 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.13 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.18 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+
+REFRESHABLE_BLOCKS = {"weather", "system", "markets", "news"}
+
+def forced_refresh_blocks() -> set[str]:
+    """Return block ids requested through --block/--refresh-block arguments."""
+    out: set[str] = set()
+    args = sys.argv[1:]
+    for flag in ("--block", "--refresh-block", "--only-block"):
+        pos = 0
+        while True:
+            try:
+                idx = args.index(flag, pos)
+            except ValueError:
+                break
+            if idx + 1 < len(args):
+                block = str(args[idx + 1]).strip().lower()
+                if block in REFRESHABLE_BLOCKS:
+                    out.add(block)
+            pos = idx + 2
+    for arg in args:
+        if arg.startswith("--block=") or arg.startswith("--refresh-block=") or arg.startswith("--only-block="):
+            block = arg.split("=", 1)[1].strip().lower()
+            if block in REFRESHABLE_BLOCKS:
+                out.add(block)
+    return out
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": SAFE_SUBPROCESS_PATH}
@@ -242,7 +269,7 @@ def refresh_plan(config: dict, old: dict | None = None) -> dict[str, bool | floa
     }
 
 def cache_is_fresh(config: dict) -> bool:
-    if "--force" in sys.argv:
+    if "--force" in sys.argv or forced_refresh_blocks():
         return False
 
     old = load_old() if CACHE.exists() else {}
@@ -1582,8 +1609,12 @@ def fetch_indices_stooq_listing(indices: list[dict[str, str]]) -> dict:
         if not stooq_symbol:
             continue
 
+        # Anchor on whitespace boundaries so e.g. ^DJI does not match a row
+        # for ^DJIA. The literal symbol must be preceded and followed by
+        # whitespace (or string start), not just be a substring of a longer
+        # ticker on the same line.
         pattern = re.compile(
-            re.escape(stooq_symbol)
+            r"(?:^|\s)" + re.escape(stooq_symbol) + r"(?=\s)"
             + r"\s+(.+?)\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s+([+-]?[0-9]+(?:\.[0-9]+)?%)\s+([+-]?[0-9]+(?:\.[0-9]+)?)\s+([A-Z][a-z]+\s+\d+|\d{1,2}:\d{2})"
         )
         match = pattern.search(plain)
@@ -2201,12 +2232,15 @@ def _count_pkcon_updates() -> tuple[int, str] | None:
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
     lines = _nonempty_lines(text)
     count = 0
+    unrecognized_payload = 0
+    status_prefixes = (
+        "getting", "loading", "querying", "refreshing", "finished", "waiting", "starting",
+        "available updates", "there are no updates", "no packages require updating",
+        "transaction", "percentage", "status",
+    )
     for line in lines:
         low = line.lower()
-        if not line or low.startswith((
-            "getting", "loading", "querying", "refreshing", "finished", "waiting", "starting",
-            "available updates", "there are no updates", "no packages require updating",
-        )):
+        if not line or low.startswith(status_prefixes):
             continue
         # PackageKit rows normally contain package IDs like name;version;arch;repo
         # and often start with an update severity/status word.
@@ -2215,9 +2249,15 @@ def _count_pkcon_updates() -> tuple[int, str] | None:
             continue
         if re.match(r"^(low|normal|important|security|bugfix|enhancement|blocked)\s+\S+;", line, re.I):
             count += 1
+            continue
+        # A non-empty, non-status line that we did not match. PackageKit
+        # output varies across distros; rather than report "0 updates" when
+        # we silently skipped real package rows, give up and let the caller
+        # treat the result as "unknown".
+        unrecognized_payload += 1
     if count:
         return count, "PackageKit"
-    if proc.returncode == 0:
+    if proc.returncode == 0 and unrecognized_payload == 0:
         return 0, "PackageKit"
     return None
 
@@ -2312,8 +2352,12 @@ def _count_dnf_updates() -> tuple[int, str] | None:
             if low.startswith(("last metadata", "metadata", "obsoleting", "security:")):
                 continue
             parts = line.split()
-            # dnf rows usually have: name.arch version repo
-            if len(parts) >= 3 and re.search(r"\.(noarch|x86_64|aarch64|i686|src)$", parts[0]):
+            # dnf rows usually have: name.arch version repo. Match any short
+            # arch suffix (alphanumeric, common values include noarch, x86_64,
+            # aarch64, i686, armv7hl, ppc64le, s390x, riscv64, src). The
+            # previous hard-coded list silently produced "0 updates" on every
+            # other architecture.
+            if len(parts) >= 3 and re.search(r"\.[a-z0-9_]{2,12}$", parts[0]):
                 lines.append(line)
         return len(lines), source
     return None
@@ -2751,14 +2795,19 @@ def build_cache(config: dict | None = None) -> dict:
         config = load_config()
     old = load_old()
     plan = refresh_plan(config, old)
+    forced_blocks = forced_refresh_blocks()
     refresh_main = bool(plan.get("main"))
     refresh_system = bool(plan.get("system"))
+    refresh_weather = refresh_main or "weather" in forced_blocks
+    refresh_markets = refresh_main or "markets" in forced_blocks
+    refresh_news = refresh_main or "news" in forced_blocks
+    refresh_system_block = refresh_system or "system" in forced_blocks
     now_ts = float(plan.get("now", time.time()))
 
     feeds = old.get("feeds", []) if isinstance(old.get("feeds", []), list) else []
     errors = old.get("errors", []) if isinstance(old.get("errors", []), list) else []
 
-    if block_enabled(config, "news") and refresh_main:
+    if block_enabled(config, "news") and refresh_news:
         feeds = []
         errors = []
         for feed in config.get("feeds", []):
@@ -2790,10 +2839,10 @@ def build_cache(config: dict | None = None) -> dict:
         "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         "language": ui_language(config),
         "nina": fetch_nina(old, config) if block_enabled(config, "nina") and refresh_main else (existing_block(old, "nina", "Warnmeldungen") if block_enabled(config, "nina") else empty_block("Warnmeldungen")),
-        "weather": fetch_weather(old, config) if block_enabled(config, "weather") and refresh_main else (existing_block(old, "weather", "Wetter") if block_enabled(config, "weather") else empty_block("Wetter")),
+        "weather": fetch_weather(old, config) if block_enabled(config, "weather") and refresh_weather else (existing_block(old, "weather", "Wetter") if block_enabled(config, "weather") else empty_block("Wetter")),
         "prayer": fetch_prayer(old, config) if block_enabled(config, "prayer") and refresh_main else (existing_block(old, "prayer", "Islamische Gebetszeiten") if block_enabled(config, "prayer") else empty_block("Islamische Gebetszeiten")),
-        "markets": fetch_markets(old, config) if block_enabled(config, "markets") and refresh_main else (existing_block(old, "markets", "Märkte") if block_enabled(config, "markets") else empty_block("Märkte")),
-        "system": fetch_system_info(old, config) if block_enabled(config, "system") and refresh_system else (existing_block(old, "system", "System") if block_enabled(config, "system") else empty_block("System")),
+        "markets": fetch_markets(old, config) if block_enabled(config, "markets") and refresh_markets else (existing_block(old, "markets", "Märkte") if block_enabled(config, "markets") else empty_block("Märkte")),
+        "system": fetch_system_info(old, config) if block_enabled(config, "system") and refresh_system_block else (existing_block(old, "system", "System") if block_enabled(config, "system") else empty_block("System")),
         "feeds": feeds,
         "errors": errors,
         "blocks": {
@@ -2806,8 +2855,8 @@ def build_cache(config: dict | None = None) -> dict:
         },
         "_refresh": {
             "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
-            "system": now_ts if refresh_system else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
-            "version": "2.0.13",
+            "system": now_ts if refresh_system_block else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
+            "version": "2.0.18",
             "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
             "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },

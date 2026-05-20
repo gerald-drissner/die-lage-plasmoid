@@ -454,6 +454,10 @@ cp "$BASE_DIR/files/systemd/dielage-local-server.service" "$HOME/.config/systemd
 # Apply the user-configured boot/login refresh setting to the systemd timer.
 # systemd reads OnStartupSec from the unit file, not from config.json, so the
 # generated timer file must be refreshed during install/upgrade.
+# Note: the Python heredoc below MUST print exactly "0" or "1" on its last
+# line. We wrap the body in try/except so a partial failure (unreadable
+# config, unwritable timer) never silently leaves the captured variable
+# empty, which the shell would then treat as "disabled".
 boot_refresh_enabled=$(python3 - <<'PYINSTALLTIMER'
 from pathlib import Path
 import json
@@ -467,16 +471,18 @@ def clamp(value, fallback=120, lo=10, hi=1800):
         n = fallback
     return max(lo, min(hi, n))
 
+enabled = True
 try:
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            config = {}
+    except Exception:
         config = {}
-except Exception:
-    config = {}
 
-enabled = bool(config.get("boot_refresh_enabled", True))
-delay = clamp(config.get("boot_refresh_delay_seconds", 120))
-text = f"""[Unit]
+    enabled = bool(config.get("boot_refresh_enabled", True))
+    delay = clamp(config.get("boot_refresh_delay_seconds", 120))
+    text = f"""[Unit]
 Description=Run initial Die Lage cache refresh after login/reboot
 
 [Timer]
@@ -487,15 +493,26 @@ Unit=dielage-cache-boot.service
 [Install]
 WantedBy=timers.target
 """
-if not timer_path.exists() or timer_path.read_text(encoding="utf-8") != text:
-    timer_path.write_text(text, encoding="utf-8")
-print("1" if enabled else "0")
+    try:
+        if not timer_path.exists() or timer_path.read_text(encoding="utf-8") != text:
+            timer_path.write_text(text, encoding="utf-8")
+    except Exception:
+        # Could not write the timer (e.g. read-only HOME). The systemctl
+        # commands below will then do nothing useful; still keep going so
+        # the rest of the install completes.
+        pass
+finally:
+    print("1" if enabled else "0")
 PYINSTALLTIMER
 )
 
 systemctl --user daemon-reload
 systemctl --user enable --now dielage-cache.timer        >/dev/null 2>&1 || true
-if [ "$boot_refresh_enabled" = "1" ]; then
+# Default to "enabled" if the Python heredoc above produced no output (for
+# example because of a transient subshell error). The user's default in
+# default-config.json is also "enabled", so this preserves the documented
+# behaviour and avoids accidentally disabling the boot timer on upgrades.
+if [ "$boot_refresh_enabled" != "0" ]; then
     systemctl --user enable --now dielage-cache-boot.timer   >/dev/null 2>&1 || true
 else
     systemctl --user disable --now dielage-cache-boot.timer  >/dev/null 2>&1 || true

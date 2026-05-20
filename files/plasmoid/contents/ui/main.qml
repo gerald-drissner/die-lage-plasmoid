@@ -70,6 +70,7 @@ PlasmoidItem {
     property string settingsTab: "general"
     property bool saving: false
     property bool refreshing: false
+    property var blockRefreshing: ({})
 
     property string feedsText: ""
     property string weatherText: ""
@@ -125,6 +126,8 @@ PlasmoidItem {
     property bool panelMiddleClickRefresh: true
     property bool blockHeadingIcons: true
     property bool prayerUpcomingHighlight: true
+    property string prayerUpcomingBeforeMinutes: "45"
+    property string prayerNowAfterMinutes: "1"
     readonly property var panelThemeIconPresetNames: [
         "view-list-details",
         "applications-internet",
@@ -147,7 +150,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.13"
+    readonly property string appVersion: "2.0.18"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
@@ -291,23 +294,58 @@ PlasmoidItem {
         }
     }
 
+    // prepareXhr arms an XMLHttpRequest with the standard timeout and a
+    // timeout handler that resets the UI flags chosen by the caller. The
+    // older single-purpose API (purpose === "status" | "cache" | "config")
+    // is still accepted as a string for backwards compatibility, but new
+    // callers should pass an options object so every "I am currently busy"
+    // flag the caller set before sending is actually cleared on timeout.
+    // Without this, a slow/dead helper would leave per-block spinners,
+    // cache-clear buttons, and the service-restart state stuck "on".
     function prepareXhr(xhr, purpose) {
         try {
             xhr.timeout = root.requestTimeoutMs
         } catch (e) {
-            // Some old QML runtimes may not expose XMLHttpRequest.timeout.
+            // Qt 6.6+ exposes XMLHttpRequest.timeout; the try/catch is a
+            // belt-and-suspenders relic from older Plasma 6 prereleases.
         }
+
+        var opts = (purpose && typeof purpose === "object") ? purpose : {}
+        var purposeName = (typeof purpose === "string") ? purpose : (opts.purpose || "")
+        var blockId = opts.block || ""
+
         xhr.ontimeout = function() {
+            // Common UI flags – always clear so the user can retry.
             root.saving = false
             root.refreshing = false
             root.helperStatusChecking = false
             root.helperOk = false
             root.errorText = root.t("requestTimedOut")
-            if (purpose === "status") {
+
+            // Per-purpose extras, kept for backwards compatibility.
+            if (purposeName === "status") {
                 root.helperStatusMessage = root.t("helperStatusTimeout")
             }
-            if (purpose === "cache" || purpose === "config") {
+            if (purposeName === "cache" || purposeName === "config") {
                 root.initialLoadDone = true
+            }
+
+            // Opt-in extras – explicitly clear additional spinners so the
+            // associated buttons re-enable when the helper times out.
+            if (opts.clearCacheClearing) {
+                root.cacheClearing = false
+            }
+            if (opts.clearServiceRestarting) {
+                root.serviceRestarting = false
+            }
+            if (opts.clearMarketApiChecking) {
+                root.marketApiChecking = false
+            }
+            if (opts.clearToolsStatusChecking) {
+                root.toolsStatusChecking = false
+            }
+            if (blockId) {
+                root.setBlockRefreshing(blockId, false)
             }
         }
     }
@@ -349,7 +387,10 @@ PlasmoidItem {
             root.portDiscoveryInProgress = false
             root.helperOk = false
             root.initialLoadDone = true
-            root.errorText = root.t("cacheUnavailable") + "0"
+            // No port in the configured range answered. This is "helper not
+            // running" rather than a real HTTP error, so use a dedicated
+            // message instead of the misleading "HTTP 0" sentinel.
+            root.errorText = root.t("helperNotReachable")
             return
         }
 
@@ -836,7 +877,10 @@ PlasmoidItem {
             "prayerSettings": "Islamic Prayer Times – location and calculation",
             "prayerHelp": "Source: AlAdhan Prayer Times API. City/country are sent to the API as text; use common English spellings such as Berlin/Germany. If a city is not accepted, use a nearby larger city or check aladhan.com/prayer-times-api.",
             "prayerHighlightUpcoming": "Highlight upcoming prayer time",
-            "prayerHighlightUpcomingHelp": "Marks a prayer time shortly before it starts, switches briefly to Now when the time arrives, and clears after about one minute. It is not meant to be a real-time prayer clock.",
+            "prayerHighlightUpcomingHelp": "Marks a prayer time before it starts, switches to Now when the time arrives, and clears after the configured time. It is not meant to be a real-time prayer clock.",
+            "prayerUpcomingBeforeMinutes": "Upcoming hint before start (minutes)",
+            "prayerNowAfterMinutes": "Keep Now hint after start (minutes)",
+            "prayerHighlightTimingHelp": "Default: 45 minutes before and 1 minute after. These hints are visual only; the prayer times themselves are refreshed with the main data interval.",
             "methodHelp": "Calculation method number: 3 = Muslim World League (common default), 2 = ISNA, 4 = Umm al-Qura Makkah, 5 = Egyptian Authority, 12 = France, 13 = Diyanet Turkey. Full list: aladhan.com/calculation-methods.",
             "city": "City",
             "country": "Country",
@@ -854,10 +898,14 @@ PlasmoidItem {
             "stocks": "Stocks",
             "jsonError": "JSON error: ",
             "cacheUnavailable": "Cache unavailable: HTTP ",
+            "helperNotReachable": "Local helper not reachable. Service may be stopped or listening on a different port.",
             "configError": "Configuration error: ",
             "configUnavailable": "Configuration unavailable: HTTP ",
             "saveFailed": "Save failed: HTTP ",
             "refreshFailed": "Refresh failed: HTTP ",
+            "refreshBlock": "Refresh this block",
+            "refreshBlockFailed": "Block refresh failed: HTTP ",
+            "refreshBlockRunning": "Another refresh is already running. This block will update shortly.",
             "requestTimedOut": "Request timed out. The local helper did not answer in time.",
             "panelSettings": "Panel appearance",
             "panelMode": "Display when in a panel",
@@ -1080,7 +1128,10 @@ PlasmoidItem {
             "prayerSettings": "Islamische Gebetszeiten – Ort und Berechnung",
             "prayerHelp": "Quelle: AlAdhan Prayer Times API. Stadt/Land werden als Text an die API gesendet; verwenden Sie übliche englische Schreibweisen wie Berlin/Germany. Wenn ein Ort nicht akzeptiert wird, nehmen Sie eine größere Stadt in der Nähe oder prüfen Sie aladhan.com/prayer-times-api.",
             "prayerHighlightUpcoming": "Bevorstehende Gebetszeit hervorheben",
-            "prayerHighlightUpcomingHelp": "Markiert eine Gebetszeit kurz bevor sie beginnt, wechselt beim Eintritt kurz auf Jetzt und verschwindet nach etwa einer Minute. Das ist bewusst keine Echtzeit-Gebetsuhr.",
+            "prayerHighlightUpcomingHelp": "Markiert eine Gebetszeit vor Beginn, wechselt beim Eintritt auf Jetzt und verschwindet nach der eingestellten Zeit. Das ist bewusst keine Echtzeit-Gebetsuhr.",
+            "prayerUpcomingBeforeMinutes": "Vorwarnzeit vor Beginn (Minuten)",
+            "prayerNowAfterMinutes": "„Jetzt“-Hinweis nach Beginn anzeigen (Minuten)",
+            "prayerHighlightTimingHelp": "Standard: 45 Minuten vorher und 1 Minute danach. Die Hinweise sind nur optisch; die Gebetszeiten selbst werden mit dem Hauptintervall aktualisiert.",
             "methodHelp": "Berechnungsmethode als Zahl: 3 = Muslim World League (gängiger Standard), 2 = ISNA, 4 = Umm al-Qura Makkah, 5 = Egyptian Authority, 12 = Frankreich, 13 = Diyanet Türkei. Vollständige Liste: aladhan.com/calculation-methods.",
             "city": "Stadt",
             "country": "Land",
@@ -1098,10 +1149,14 @@ PlasmoidItem {
             "stocks": "Aktien",
             "jsonError": "JSON-Fehler: ",
             "cacheUnavailable": "Cache nicht erreichbar: HTTP ",
+            "helperNotReachable": "Lokaler Hintergrunddienst nicht erreichbar. Der Dienst läuft möglicherweise nicht oder hört auf einem anderen Port.",
             "configError": "Konfigurationsfehler: ",
             "configUnavailable": "Konfiguration nicht erreichbar: HTTP ",
             "saveFailed": "Speichern fehlgeschlagen: HTTP ",
             "refreshFailed": "Aktualisieren fehlgeschlagen: HTTP ",
+            "refreshBlock": "Diesen Block aktualisieren",
+            "refreshBlockFailed": "Block-Aktualisierung fehlgeschlagen: HTTP ",
+            "refreshBlockRunning": "Eine andere Aktualisierung läuft bereits. Dieser Block wird gleich aktualisiert.",
             "requestTimedOut": "Zeitüberschreitung: Der lokale Hintergrunddienst hat nicht rechtzeitig geantwortet.",
             "panelSettings": "Panel-Darstellung",
             "panelMode": "Darstellung in einem Panel",
@@ -1363,7 +1418,8 @@ PlasmoidItem {
         // Mark shortly before the time. Once the time arrives, the separate
         // "now" marker below takes over briefly. This is intentionally a
         // lightweight hint, not a constantly refreshed prayer clock.
-        return seconds > 0 && seconds <= 45 * 60
+        var beforeMinutes = root.clampInt(root.prayerUpcomingBeforeMinutes, 45, 1, 180)
+        return seconds > 0 && seconds <= beforeMinutes * 60
     }
 
     function prayerIsNow(p) {
@@ -1378,7 +1434,8 @@ PlasmoidItem {
 
         // Keep a stronger "Now" marker for about one minute after the time.
         // nowTick updates every 10 seconds, so this clears without a cache refresh.
-        return seconds <= 0 && seconds >= -60
+        var afterMinutes = root.clampInt(root.prayerNowAfterMinutes, 1, 1, 30)
+        return seconds <= 0 && seconds >= -(afterMinutes * 60)
     }
 
     function weatherTemperatureNumber(value) {
@@ -1950,6 +2007,8 @@ PlasmoidItem {
             root.panelMiddleClickRefresh = data.ui.panel_middle_click_refresh !== false
             root.blockHeadingIcons = data.ui.block_heading_icons !== false
             root.prayerUpcomingHighlight = data.ui.prayer_upcoming_highlight !== false
+            root.prayerUpcomingBeforeMinutes = String(data.ui.prayer_upcoming_before_minutes !== undefined ? data.ui.prayer_upcoming_before_minutes : 45)
+            root.prayerNowAfterMinutes = String(data.ui.prayer_now_after_minutes !== undefined ? data.ui.prayer_now_after_minutes : 1)
             root.separatorStyle = root.cleanSeparatorStyle(data.ui.separator_style || "subtle")
             root.newsLinksClickable = data.ui.news_links_clickable !== false
             root.titleStyle = root.cleanTitleStyle(data.ui.title_style || "accent")
@@ -1976,6 +2035,8 @@ PlasmoidItem {
             root.panelMiddleClickRefresh = true
             root.blockHeadingIcons = true
             root.prayerUpcomingHighlight = true
+            root.prayerUpcomingBeforeMinutes = "45"
+            root.prayerNowAfterMinutes = "1"
             root.separatorStyle = "subtle"
             root.newsLinksClickable = true
             root.titleStyle = "accent"
@@ -1999,6 +2060,8 @@ PlasmoidItem {
             root.panelMiddleClickRefresh = true
             root.blockHeadingIcons = true
             root.prayerUpcomingHighlight = true
+            root.prayerUpcomingBeforeMinutes = "45"
+            root.prayerNowAfterMinutes = "1"
             root.separatorStyle = "subtle"
             root.newsLinksClickable = true
             root.titleStyle = "accent"
@@ -2184,6 +2247,8 @@ PlasmoidItem {
                 "panel_middle_click_refresh": root.panelMiddleClickRefresh,
                 "block_heading_icons": root.blockHeadingIcons,
                 "prayer_upcoming_highlight": root.prayerUpcomingHighlight,
+                "prayer_upcoming_before_minutes": root.clampInt(root.prayerUpcomingBeforeMinutes, 45, 1, 180),
+                "prayer_now_after_minutes": root.clampInt(root.prayerNowAfterMinutes, 1, 1, 30),
                 "separator_style": root.cleanSeparatorStyle(root.separatorStyle),
                 "news_links_clickable": root.newsLinksClickable,
                 "title_style": root.cleanTitleStyle(root.titleStyle),
@@ -2245,6 +2310,71 @@ PlasmoidItem {
         xhr.send(JSON.stringify(payload))
     }
 
+    function canRefreshBlock(id) {
+        return id === "weather" || id === "system" || id === "markets" || id === "news"
+    }
+
+    function isBlockRefreshing(id) {
+        return Boolean(root.blockRefreshing && root.blockRefreshing[id] === true)
+    }
+
+    function setBlockRefreshing(id, value) {
+        var clean = {}
+        var old = root.blockRefreshing || {}
+        for (var key in old) {
+            if (old.hasOwnProperty(key)) {
+                clean[key] = old[key] === true
+            }
+        }
+        clean[id] = value === true
+        root.blockRefreshing = clean
+    }
+
+    function triggerBlockRefresh(id) {
+        if (!root.canRefreshBlock(id)) {
+            return
+        }
+        root.setBlockRefreshing(id, true)
+
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr, { block: id })
+
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                root.setBlockRefreshing(id, false)
+
+                if (xhr.status === 200) {
+                    var alreadyRunning = false
+                    try {
+                        var resp = JSON.parse(xhr.responseText || "{}")
+                        alreadyRunning = resp && resp.already_running === true
+                    } catch (e) {
+                        alreadyRunning = false
+                    }
+                    if (alreadyRunning) {
+                        root.errorText = root.t("refreshBlockRunning")
+                        blockRefreshRetryTimer.restart()
+                    } else {
+                        root.errorText = ""
+                        root.loadCache()
+                    }
+                } else {
+                    root.errorText = root.t("refreshBlockFailed") + xhr.status
+                    if (xhr.status === 0) {
+                        root.helperOk = false
+                        if (!root.portDiscoveryInProgress) {
+                            root.discoverLocalHelperPort()
+                        }
+                    }
+                }
+            }
+        }
+
+        xhr.open("POST", root.baseUrl + "/refresh-block")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send(JSON.stringify({ "block": id }))
+    }
+
     function triggerRefresh() {
         root.refreshing = true
 
@@ -2302,6 +2432,13 @@ PlasmoidItem {
         onTriggered: root.loadCache()
     }
 
+    Timer {
+        id: blockRefreshRetryTimer
+        interval: 5000
+        repeat: false
+        onTriggered: root.loadCache()
+    }
+
     // ---- Reset everything (v1.51) ------------------------------------------
     // Wipes the local config.json by overwriting with the default file, then
     // re-reads it. The server keeps writing to the same path, so this is a
@@ -2343,7 +2480,7 @@ PlasmoidItem {
         root.helperStatusMessage = ""
         root.showCacheActionMessage(root.t("clearCacheWorking"), true)
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr)
+        root.prepareXhr(xhr, { clearCacheClearing: true })
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
                 root.cacheClearing = false
@@ -2382,7 +2519,7 @@ PlasmoidItem {
 
         root.serviceRestarting = true
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr)
+        root.prepareXhr(xhr, { clearServiceRestarting: true })
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
                 root.serviceRestarting = false
@@ -2488,7 +2625,7 @@ PlasmoidItem {
         root.toolsStatusMessage = root.t("toolsChecking")
 
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr, "status")
+        root.prepareXhr(xhr, { purpose: "status", clearToolsStatusChecking: true })
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
                 root.toolsStatusChecking = false
@@ -2560,7 +2697,7 @@ PlasmoidItem {
         root.marketApiStatusMessage = root.t("marketApiChecking")
 
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr, "status")
+        root.prepareXhr(xhr, { purpose: "status", clearMarketApiChecking: true })
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
                 root.marketApiChecking = false
@@ -2849,19 +2986,35 @@ PlasmoidItem {
                         }
                     }
 
-                    QQC2.Button {
-                        text: root.refreshing ? root.t("loading") : root.t("refresh")
-                        enabled: !root.refreshing
-                        font.pixelSize: root.smallSize
+                    QQC2.ToolButton {
+                        id: topRefreshButton
+                        icon.name: "view-refresh"
+                        display: QQC2.AbstractButton.IconOnly
+                        enabled: true
+                        opacity: root.refreshing ? 0.68 : 0.96
+                        implicitWidth: Kirigami.Units.gridUnit * 1.45
+                        implicitHeight: Kirigami.Units.gridUnit * 1.45
+                        icon.width: Math.max(14, root.smallSize + 2)
+                        icon.height: icon.width
+                        icon.color: root.appHighlightColor
                         QQC2.ToolTip.visible: hovered
                         QQC2.ToolTip.delay: 600
-                        QQC2.ToolTip.text: root.t("refresh")
-                        onClicked: root.triggerRefresh()
+                        QQC2.ToolTip.text: root.refreshing ? root.t("loading") : root.t("refresh")
+                        onClicked: {
+                            if (!root.refreshing) {
+                                root.triggerRefresh()
+                            }
+                        }
                     }
 
-                    QQC2.Button {
-                        text: root.settingsOpen ? root.t("back") : root.t("settings")
-                        font.pixelSize: root.smallSize
+                    QQC2.ToolButton {
+                        icon.name: root.settingsOpen ? "go-previous" : "configure"
+                        display: QQC2.AbstractButton.IconOnly
+                        opacity: 0.92
+                        implicitWidth: Kirigami.Units.gridUnit * 1.55
+                        implicitHeight: Kirigami.Units.gridUnit * 1.55
+                        icon.width: Math.max(14, root.smallSize + 2)
+                        icon.height: icon.width
                         QQC2.ToolTip.visible: hovered
                         QQC2.ToolTip.delay: 600
                         QQC2.ToolTip.text: root.settingsOpen ? root.t("back") : root.t("settings")
@@ -4418,6 +4571,67 @@ PlasmoidItem {
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
                                     spacing: Kirigami.Units.largeSpacing
+                                    enabled: root.prayerUpcomingHighlight
+
+                                    ColumnLayout {
+                                        Layout.preferredWidth: 230
+                                        Layout.minimumWidth: 0
+
+                                        PlasmaComponents3.Label {
+                                            text: root.t("prayerUpcomingBeforeMinutes")
+                                            font.pixelSize: root.smallSize
+                                            opacity: root.prayerUpcomingHighlight ? 1.0 : 0.55
+                                        }
+
+                                        QQC2.TextField {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.prayerUpcomingBeforeMinutes
+                                            font.pixelSize: root.smallSize
+                                            placeholderText: "45"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            enabled: root.prayerUpcomingHighlight
+                                            onTextChanged: root.prayerUpcomingBeforeMinutes = text
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.preferredWidth: 250
+                                        Layout.minimumWidth: 0
+
+                                        PlasmaComponents3.Label {
+                                            text: root.t("prayerNowAfterMinutes")
+                                            font.pixelSize: root.smallSize
+                                            opacity: root.prayerUpcomingHighlight ? 1.0 : 0.55
+                                        }
+
+                                        QQC2.TextField {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.prayerNowAfterMinutes
+                                            font.pixelSize: root.smallSize
+                                            placeholderText: "1"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            enabled: root.prayerUpcomingHighlight
+                                            onTextChanged: root.prayerNowAfterMinutes = text
+                                        }
+                                    }
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("prayerHighlightTimingHelp")
+                                    opacity: 0.64
+                                    font.pixelSize: Math.max(9, root.smallSize - 1)
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.largeSpacing
 
                                     ColumnLayout {
                                         Layout.fillWidth: true
@@ -4986,6 +5200,27 @@ PlasmoidItem {
                                 elide: Text.ElideNone
                             }
 
+
+                            QQC2.ToolButton {
+                                id: weatherBlockRefreshButton
+                                icon.name: "view-refresh"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.95
+                                implicitHeight: Kirigami.Units.gridUnit * 0.95
+                                enabled: true
+                                opacity: root.isBlockRefreshing("weather") ? 0.58 : 0.88
+                                icon.width: Math.max(10, root.smallSize - 2)
+                                icon.height: icon.width
+                                icon.color: root.appHighlightColor
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.isBlockRefreshing("weather") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("weather"))
+                                onClicked: {
+                                    if (!root.refreshing && !root.isBlockRefreshing("weather")) {
+                                        root.triggerBlockRefresh("weather")
+                                    }
+                                }
+                            }
+
                             QQC2.ToolButton {
                                 text: "▾"
                                 font.pixelSize: Math.max(10, root.smallSize - 1)
@@ -5397,6 +5632,27 @@ PlasmoidItem {
                                 elide: Text.ElideNone
                             }
 
+
+                            QQC2.ToolButton {
+                                id: systemBlockRefreshButton
+                                icon.name: "view-refresh"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.95
+                                implicitHeight: Kirigami.Units.gridUnit * 0.95
+                                enabled: true
+                                opacity: root.isBlockRefreshing("system") ? 0.58 : 0.88
+                                icon.width: Math.max(10, root.smallSize - 2)
+                                icon.height: icon.width
+                                icon.color: root.appHighlightColor
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.isBlockRefreshing("system") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("system"))
+                                onClicked: {
+                                    if (!root.refreshing && !root.isBlockRefreshing("system")) {
+                                        root.triggerBlockRefresh("system")
+                                    }
+                                }
+                            }
+
                             QQC2.ToolButton {
                                 text: "▾"
                                 font.pixelSize: Math.max(10, root.smallSize - 1)
@@ -5507,6 +5763,27 @@ PlasmoidItem {
                                 color: root.appHighlightColor
                                 wrapMode: Text.WordWrap
                                 elide: Text.ElideNone
+                            }
+
+
+                            QQC2.ToolButton {
+                                id: marketsBlockRefreshButton
+                                icon.name: "view-refresh"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.95
+                                implicitHeight: Kirigami.Units.gridUnit * 0.95
+                                enabled: true
+                                opacity: root.isBlockRefreshing("markets") ? 0.58 : 0.88
+                                icon.width: Math.max(10, root.smallSize - 2)
+                                icon.height: icon.width
+                                icon.color: root.appHighlightColor
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.isBlockRefreshing("markets") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("markets"))
+                                onClicked: {
+                                    if (!root.refreshing && !root.isBlockRefreshing("markets")) {
+                                        root.triggerBlockRefresh("markets")
+                                    }
+                                }
                             }
 
                             QQC2.ToolButton {
@@ -5956,6 +6233,27 @@ PlasmoidItem {
                                 color: root.appHighlightColor
                                 wrapMode: Text.WordWrap
                                 elide: Text.ElideNone
+                            }
+
+
+                            QQC2.ToolButton {
+                                id: newsBlockRefreshButton
+                                icon.name: "view-refresh"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.95
+                                implicitHeight: Kirigami.Units.gridUnit * 0.95
+                                enabled: true
+                                opacity: root.isBlockRefreshing("news") ? 0.58 : 0.88
+                                icon.width: Math.max(10, root.smallSize - 2)
+                                icon.height: icon.width
+                                icon.color: root.appHighlightColor
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.isBlockRefreshing("news") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("news"))
+                                onClicked: {
+                                    if (!root.refreshing && !root.isBlockRefreshing("news")) {
+                                        root.triggerBlockRefresh("news")
+                                    }
+                                }
                             }
 
                             QQC2.ToolButton {

@@ -67,6 +67,7 @@ def allowed_origins_for_port(port: int) -> set[str]:
 # memory pressure.
 MAX_POST_BYTES = 256 * 1024
 REQUIRED_POST_CONTENT_TYPE = "application/json"
+ALLOWED_REFRESH_BLOCKS = {"weather", "system", "markets", "news"}
 
 DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
            {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
@@ -129,6 +130,8 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'panel_middle_click_refresh': True,
         'block_heading_icons': True,
         'prayer_upcoming_highlight': True,
+        'prayer_upcoming_before_minutes': 45,
+        'prayer_now_after_minutes': 1,
         'custom_title': '',
         'separator_style': 'subtle',
         'news_links_clickable': True,
@@ -375,6 +378,8 @@ def merge_config(data: dict) -> dict:
     ui["font_size"] = clamp_int(ui.get("font_size", defaults["ui"].get("font_size", 16)), defaults["ui"].get("font_size", 16), 12, 34)
     ui["news_font_size"] = clamp_int(ui.get("news_font_size", defaults["ui"].get("news_font_size", 16)), defaults["ui"].get("news_font_size", 16), 10, 42)
     ui["news_font_size_offset"] = clamp_int(ui.get("news_font_size_offset", defaults["ui"].get("news_font_size_offset", 0)), defaults["ui"].get("news_font_size_offset", 0), -3, 6)
+    ui["prayer_upcoming_before_minutes"] = clamp_int(ui.get("prayer_upcoming_before_minutes", defaults["ui"].get("prayer_upcoming_before_minutes", 45)), defaults["ui"].get("prayer_upcoming_before_minutes", 45), 1, 180)
+    ui["prayer_now_after_minutes"] = clamp_int(ui.get("prayer_now_after_minutes", defaults["ui"].get("prayer_now_after_minutes", 1)), defaults["ui"].get("prayer_now_after_minutes", 1), 1, 30)
     ui["panel_width"] = clamp_int(ui.get("panel_width", defaults["ui"].get("panel_width", 24)), defaults["ui"].get("panel_width", 24), 16, 96)
     ui["panel_popup_width"] = clamp_int(ui.get("panel_popup_width", defaults["ui"].get("panel_popup_width", 600)), defaults["ui"].get("panel_popup_width", 600), 520, 1400)
 
@@ -435,15 +440,16 @@ def merge_config(data: dict) -> dict:
 
     return data
 
-def run_refresh() -> bool:
+def run_refresh(block: str | None = None) -> bool:
     # Do not let two fast clicks or one timer + one manual refresh spawn parallel
     # cache processes.  If a refresh is already running, report success with an
     # "already_running" hint instead of blocking another HTTP worker thread.
     if not REFRESH_LOCK.acquire(blocking=False):
         return False
     try:
+        args = [str(CACHE_SCRIPT), "--force"] if not block else [str(CACHE_SCRIPT), "--block", block]
         subprocess.run(
-            [str(CACHE_SCRIPT), "--force"],
+            args,
             check=True,
             timeout=120,
             stdout=subprocess.DEVNULL,
@@ -496,7 +502,7 @@ def read_json_post_body(handler) -> dict:
 
 
 def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
-    request_headers = {"User-Agent": "DieLage/2.0.13 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers = {"User-Agent": "DieLage/2.0.18 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
     request_headers.update(headers)
     req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -597,7 +603,7 @@ def tool_status() -> dict:
 
     return {
         "ok": True,
-        "version": "2.0.13",
+        "version": "2.0.18",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -708,7 +714,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "2.0.13", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "version": "2.0.18", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":
@@ -727,13 +733,26 @@ class Handler(BaseHTTPRequestHandler):
         # This blocks old-fashioned CSRF vectors such as plain HTML forms or
         # no-cors text/plain fetches that might omit an Origin header.  QML sets
         # the header explicitly for /config, /refresh and /reset.
-        if path in ("/config", "/refresh", "/reset", "/clear-cache", "/restart", "/check-market-apis") and self._json_post_required():
+        if path in ("/config", "/refresh", "/refresh-block", "/reset", "/clear-cache", "/restart", "/check-market-apis") and self._json_post_required():
             return
 
         if path == "/refresh":
             try:
                 did_run = run_refresh()
                 self._send_json({"ok": True, "already_running": not did_run})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/refresh-block":
+            try:
+                payload = read_json_post_body(self)
+                block = str(payload.get("block", "")).strip().lower()
+                if block not in ALLOWED_REFRESH_BLOCKS:
+                    self._send_json({"ok": False, "error": "invalid block"}, 400)
+                    return
+                did_run = run_refresh(block)
+                self._send_json({"ok": True, "block": block, "already_running": not did_run})
+            except json.JSONDecodeError as exc:
+                self._send_json({"ok": False, "error": f"invalid JSON: {exc.msg}"}, 400)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/config":

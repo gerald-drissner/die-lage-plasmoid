@@ -93,10 +93,10 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="2.0.13" date="2026-05-19">
+    <release version="2.0.18" date="2026-05-20">
       <description>
-        <p>Fixes package-update counting on Arch/CachyOS systems and prevents overlapping cache refreshes.</p>
-        <p xml:lang="de">Korrigiert die Zählung verfügbarer Paket-Updates auf Arch/CachyOS-Systemen und verhindert überlappende Cache-Aktualisierungen.</p>
+        <p>Adds per-block refresh buttons for Weather, System, Markets and News while keeping the global refresh button.</p>
+        <p xml:lang="de">Ergänzt einzelne Aktualisieren-Schaltflächen für Wetter, System, Märkte und Nachrichten; die globale Aktualisierung bleibt erhalten.</p>
       </description>
     </release>
     <release version="2.0.9" date="2026-05-18">
