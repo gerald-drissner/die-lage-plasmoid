@@ -1,5 +1,11 @@
 # Die Lage Changelog
 
+## v2.0.19
+
+- Fixes duplicate GeoSphere Austria warnings that appeared as several visually identical cards when the provider split one warning into consecutive daily slices.
+- Merges identical GeoSphere warning entries by source area, location, warning type, warning level, title and description, keeping the latest expiry time.
+- Keeps NINA, MeteoAlarm, NWS and custom feed behavior unchanged.
+
 ## v2.0.18
 
 - Restores the cleaner KDE/theme refresh icon for the top refresh action and per-block refresh controls.

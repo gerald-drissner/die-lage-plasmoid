@@ -93,6 +93,12 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.0.19" date="2026-05-24">
+      <description>
+        <p>Fixes duplicate GeoSphere Austria warnings by merging identical warning slices into one card with the latest expiry time.</p>
+        <p xml:lang="de">Behebt doppelte GeoSphere-Austria-Warnungen, indem identische Warnabschnitte zu einer Karte mit dem spätesten Ablaufzeitpunkt zusammengeführt werden.</p>
+      </description>
+    </release>
     <release version="2.0.18" date="2026-05-20">
       <description>
         <p>Adds per-block refresh buttons for Weather, System, Markets and News while keeping the global refresh button.</p>

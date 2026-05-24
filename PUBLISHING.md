@@ -5,7 +5,7 @@
 Run the release check for the current version, for example:
 
 ```bash
-./release-checks-v2.0.18.sh
+./release-checks-v2.0.19.sh
 ```
 
 ## GitHub release assets

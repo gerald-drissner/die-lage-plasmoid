@@ -150,7 +150,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.18"
+    readonly property string appVersion: "2.0.19"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload

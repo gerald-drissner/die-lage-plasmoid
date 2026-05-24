@@ -131,7 +131,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.18 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.0.19 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 
 REFRESHABLE_BLOCKS = {"weather", "system", "markets", "news"}
 
@@ -736,11 +736,52 @@ def geosphere_severity(value) -> str:
         return "minor"
     return ""
 
-def fmt_epoch(value) -> str:
+def epoch_int(value) -> int | None:
     try:
-        return datetime.fromtimestamp(int(value)).strftime("%Y-%m-%d %H:%M")
+        if value is None or value == "":
+            return None
+        return int(float(str(value).strip()))
+    except Exception:
+        return None
+
+def fmt_epoch(value) -> str:
+    ts = epoch_int(value)
+    if ts is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
     except Exception:
         return ""
+
+def fmt_epoch_ts(value: int | None) -> str:
+    if value is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""
+
+def compact_warning_key_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def geosphere_group_key(label: str, location: str, warn_type_id: object, warn_level_id: object, title: str, description: str) -> str:
+    """Stable key for repeated GeoSphere day slices of the same warning.
+
+    GeoSphere may return one official warning as several adjacent entries
+    with identical type/level/title but different end times.  The widget
+    should show that as one warning with the latest end time, not as a
+    stack of visually identical cards.
+    """
+    title_key = compact_warning_key_text(title)
+    desc_key = compact_warning_key_text(clean(description, 120))
+    return "|".join([
+        compact_warning_key_text(label),
+        compact_warning_key_text(location),
+        compact_warning_key_text(warn_type_id),
+        compact_warning_key_text(warn_level_id),
+        title_key,
+        desc_key,
+    ])
 
 def fetch_geosphere(label: str, lat: str, lon: str, language: str = "de", include=None, exclude=None) -> list[dict[str, str]]:
     """Point-based official Austrian warnings from GeoSphere Austria/ZAMG.
@@ -763,18 +804,28 @@ def fetch_geosphere(label: str, lat: str, lon: str, language: str = "de", includ
         lprops = loc.get("properties", {}) if isinstance(loc.get("properties"), dict) else {}
         location = str(lprops.get("name") or "").strip()
 
-    items = []
+    # GeoSphere sometimes returns one continuous warning as several daily
+    # slices.  Without grouping, Bludenz can show the same yellow heat warning
+    # three times with only the expiry date changed.  We merge identical
+    # source/type/level/title/description entries and keep the widest time span.
+    grouped: dict[str, dict[str, object]] = {}
+    order: list[str] = []
+
     for warning in warnings:
         wprops = warning.get("properties", {}) if isinstance(warning, dict) else {}
         raw = wprops.get("rawinfo", {}) if isinstance(wprops.get("rawinfo"), dict) else {}
-        warn_type = geosphere_type_name(wprops.get("warntypid") or raw.get("warntypid"), language)
-        level = geosphere_level_name(wprops.get("warnstufeid") or raw.get("warnstufeid"), language)
-        severity = geosphere_severity(wprops.get("warnstufeid") or raw.get("warnstufeid"))
+        warn_type_id = wprops.get("warntypid") or raw.get("warntypid")
+        warn_level_id = wprops.get("warnstufeid") or raw.get("warnstufeid")
+        warn_type = geosphere_type_name(warn_type_id, language)
+        level = geosphere_level_name(warn_level_id, language)
+        severity = geosphere_severity(warn_level_id)
         headline = raw.get("headline") or raw.get("event") or raw.get("title") or ""
         title = headline or (f"{level} {warn_type}" if level else warn_type)
         description = raw.get("description") or raw.get("text") or raw.get("kurztext") or raw.get("langtext") or ""
-        start = fmt_epoch(raw.get("start") or wprops.get("start"))
-        end = fmt_epoch(raw.get("end") or raw.get("expires") or wprops.get("end"))
+        start_ts = epoch_int(raw.get("start") or wprops.get("start"))
+        end_ts = epoch_int(raw.get("end") or raw.get("expires") or wprops.get("end"))
+        start = fmt_epoch_ts(start_ts)
+        end = fmt_epoch_ts(end_ts)
         details = " · ".join(x for x in (label, "GeoSphere", location, level, warn_type, (("until " if language == "en" else "bis ") + end if end else "")) if x)
         candidate = {
             "title": clean(title, 220),
@@ -783,9 +834,44 @@ def fetch_geosphere(label: str, lat: str, lon: str, language: str = "de", includ
             "link": "https://warnungen.zamg.at/",
             "_filter_text": " ".join(str(x) for x in (title, description, details, location, level, warn_type, start, end) if x),
         }
-        if warning_matches_filters(candidate, include, exclude):
-            candidate.pop("_filter_text", None)
-            items.append(candidate)
+        if not warning_matches_filters(candidate, include, exclude):
+            continue
+
+        key = geosphere_group_key(label, location, warn_type_id, warn_level_id, title, description)
+        if key not in grouped:
+            grouped[key] = {
+                "title": candidate["title"],
+                "details_prefix": [x for x in (label, "GeoSphere", location, level, warn_type) if x],
+                "severity": severity,
+                "link": candidate["link"],
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "fallback_details": candidate["details"],
+            }
+            order.append(key)
+        else:
+            current = grouped[key]
+            if start_ts is not None:
+                cur_start = current.get("start_ts")
+                current["start_ts"] = start_ts if cur_start is None else min(int(cur_start), start_ts)
+            if end_ts is not None:
+                cur_end = current.get("end_ts")
+                current["end_ts"] = end_ts if cur_end is None else max(int(cur_end), end_ts)
+
+    items: list[dict[str, str]] = []
+    for key in order:
+        item = grouped[key]
+        end = fmt_epoch_ts(item.get("end_ts") if isinstance(item.get("end_ts"), int) else None)
+        parts = list(item.get("details_prefix", []))
+        if end:
+            parts.append(("until " if language == "en" else "bis ") + end)
+        details = " · ".join(str(x) for x in parts if x) or str(item.get("fallback_details") or "")
+        items.append({
+            "title": str(item.get("title") or ("Warning" if language == "en" else "Warnung")),
+            "details": clean(details, 260),
+            "severity": str(item.get("severity") or ""),
+            "link": str(item.get("link") or "https://warnungen.zamg.at/"),
+        })
         if len(items) >= 8:
             break
     return items
@@ -2856,7 +2942,7 @@ def build_cache(config: dict | None = None) -> dict:
         "_refresh": {
             "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
             "system": now_ts if refresh_system_block else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
-            "version": "2.0.18",
+            "version": "2.0.19",
             "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
             "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },
