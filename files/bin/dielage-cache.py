@@ -7,20 +7,26 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+import concurrent.futures
 import copy
 import csv
+import email.utils
 import fcntl
 import getpass
+import gzip
 import html
 import os
 import io
 import json
 import platform
 import shutil
+import socket
+import ssl
 import subprocess
 import re
 import sys
 import time
+import zlib
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -34,29 +40,51 @@ BASE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR = Path.home() / ".cache" / "die-lage"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# config.json can hold Twelve Data and Finnhub API keys, so it should not be
+# readable by other local accounts. Tighten on every start; this is cheap and
+# also repairs installs created before v2.1.1 under a permissive umask.
+def _restrict(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except Exception:
+        pass
+
+
+_restrict(BASE_CONFIG_DIR, 0o700)
+_restrict(OUT_DIR, 0o700)
+
 CONFIG = BASE_CONFIG_DIR / "config.json"
 CACHE = OUT_DIR / "rss.json"
 
+# Emergency fallback only. The shipped files/config/default-config.json is the
+# single source of truth and is what load_default_config() reads at runtime.
+# This literal is generated from that file at release time; do not hand-edit it.
 DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
            {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
            {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
            {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
            {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
-           {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
+           {'limit': 4,
+            'name': 'Haaretz ME',
+            'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
            {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
            {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
-           {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
+           {'limit': 3,
+            'name': 'RBB24',
+            'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
            {'limit': 3,
             'name': 'Polizei Berlin',
             'url': 'https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml'},
-           {'limit': 3, 'name': 'Heise online', 'url': 'https://www.heise.de/newsticker/heise.rdf'}],
+           {'limit': 3,
+            'name': 'Heise online',
+            'url': 'https://www.heise.de/newsticker/heise.rdf'}],
  'weather_locations': [{'name': 'Hennigsdorf', 'lat': 52.6391, 'lon': 13.209},
                        {'name': 'Berlin', 'lat': 52.5155, 'lon': 13.4546},
                        {'name': 'Bludenz', 'lat': 47.1527, 'lon': 9.8276},
                        {'name': 'El Paso', 'lat': 31.7619, 'lon': -106.485},
                        {'name': 'Nashville', 'lat': 36.1744, 'lon': -86.76796},
                        {'name': 'Alexandria', 'lat': 31.2156, 'lon': 29.9553}],
- 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'}],
+ 'nina_codes': [{'name': 'Berlin', 'code': '110000000000', 'source': 'nina'}],
  'prayer': {'city': 'Berlin', 'country': 'Germany', 'method': 3},
  'markets': {'currencies': ['USD', 'GBP', 'CHF'],
              'indices': [{'name': 'Dow Jones', 'symbol': '^DJI'},
@@ -65,53 +93,64 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
              'twelve_data_api_key': '',
              'finnhub_api_key': '',
              'provider_mode': 'auto',
+             'stocks': [],
              'show_currencies': True,
              'show_indices': True,
-             'show_stocks': True,
-             'stocks': []},
+             'show_stocks': True},
  'fetch_interval_minutes': 10,
  'system_interval_minutes': 3,
  'local_server_port': 8765,
  'boot_refresh_enabled': True,
  'boot_refresh_delay_seconds': 120,
- 'system': {'show_info': True,
-            'show_network': True,
-            'show_public_network': False,
-            'show_vpn': True,
-            'vpn_label': '',
-            'show_updates': True},
  'ui': {'font_size': 16,
         'highlight_color': '',
+        'news_font_family': '',
+        'news_font_size_offset': 0,
+        'news_font_size': 16,
+        'language': 'auto',
+        'panel_mode': 'icon',
         'desktop_background_mode': 'default',
         'desktop_background_color': '',
-        'news_font_family': '',
-        'news_font_size': 16,
-        'news_font_size_offset': 0,
-        'language': 'de',
-        'panel_mode': 'icon',
+        'custom_title': '',
+        'separator_style': 'subtle',
+        'news_links_clickable': True,
+        'title_style': 'accent',
         'panel_icon_mode': 'dielage',
         'panel_theme_icon': 'view-list-details',
         'panel_warning_badge': True,
         'panel_no_warnings_mode': 'icon',
-        'panel_width': 24,
-        'panel_popup_width': 600,
-        'panel_middle_click_refresh': True,
         'block_heading_icons': True,
+        'panel_width': 24,
+        'panel_middle_click_refresh': True,
         'prayer_upcoming_highlight': True,
+        'panel_popup_width': 600,
         'prayer_upcoming_before_minutes': 45,
         'prayer_now_after_minutes': 1,
-        'custom_title': '',
-        'separator_style': 'subtle',
-        'news_links_clickable': True,
-        'title_style': 'accent'},
- 'blocks': {'weather': True, 'prayer': True, 'nina': True, 'markets': True, 'system': True, 'news': True},
+        'news_show_age': True,
+        'news_age_color_enabled': True,
+        'news_age_color_minutes': 120,
+        'news_age_recent_color': '',
+        'news_age_older_color': ''},
+ 'blocks': {'weather': True,
+            'prayer': True,
+            'nina': True,
+            'news': True,
+            'markets': True,
+            'system': True},
  'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
+ 'system': {'show_info': True,
+            'show_network': True,
+            'show_public_network': False,
+            'show_updates': True,
+            'show_vpn': True,
+            'vpn_label': ''},
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
                       'markets': False,
                       'news': False,
-                      'system': False}}
+                      'system': False},
+ 'weather': {'openweather_api_key': ''}}
 
 FALLBACK_DEFAULT_CONFIG = copy.deepcopy(DEFAULT_CONFIG)
 DEFAULT_CONFIG_FILE = BASE_CONFIG_DIR / "default-config.json"
@@ -131,7 +170,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.0.19 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.1.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 
 REFRESHABLE_BLOCKS = {"weather", "system", "markets", "news"}
 
@@ -157,6 +196,32 @@ def forced_refresh_blocks() -> set[str]:
             if block in REFRESHABLE_BLOCKS:
                 out.add(block)
     return out
+# Exit code used when another cache process already holds the refresh lock.
+# The local server translates it into already_running:true. Exiting 0 here made
+# a contended refresh look like a completed one, so the widget reloaded the
+# unchanged cache and the user saw nothing happen.
+EXIT_LOCK_BUSY = 75
+
+
+def manual_refresh() -> bool:
+    """True when a human asked for this refresh, not the systemd timer.
+
+    Both --force (global refresh button) and --block (per-block refresh button)
+    are manual. Only --force counted before, so the News block's own retry
+    silently obeyed the feed backoff and returned instantly without asking the
+    publisher anything.
+    """
+    args = sys.argv[1:]
+    if "--force" in args:
+        return True
+    for arg in args:
+        if arg in ("--block", "--refresh-block", "--only-block"):
+            return True
+        if arg.startswith(("--block=", "--refresh-block=", "--only-block=")):
+            return True
+    return False
+
+
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": SAFE_SUBPROCESS_PATH}
@@ -189,10 +254,19 @@ WEATHER_CODES_EN = {
     95: "Thunderstorm", 96: "Thunderstorm with light hail", 99: "Thunderstorm with heavy hail",
 }
 
+def system_language() -> str:
+    raw = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or "").strip().lower()
+    return "de" if raw.startswith("de") else "en"
+
+
 def ui_language(config: dict) -> str:
     ui = config.get("ui", {}) if isinstance(config.get("ui", {}), dict) else {}
-    lang = str(ui.get("language", "de") or "de").strip().lower()
-    return "en" if lang.startswith("en") else "de"
+    lang = str(ui.get("language", "auto") or "auto").strip().lower()
+    if lang.startswith("de"):
+        return "de"
+    if lang.startswith("en"):
+        return "en"
+    return system_language()
 
 def is_english(config: dict) -> bool:
     return ui_language(config) == "en"
@@ -201,6 +275,9 @@ def atomic_write_json(path: Path, data: dict) -> None:
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Set the mode on the temp file before the rename, so the destination
+        # is never briefly world-readable under a permissive umask.
+        _restrict(tmp, 0o600)
         tmp.replace(path)
     except BaseException:
         try:
@@ -240,6 +317,12 @@ def refresh_plan(config: dict, old: dict | None = None) -> dict[str, bool | floa
     """
     if "--force" in sys.argv:
         return {"main": True, "system": True, "now": time.time()}
+
+    # A manual block refresh is exact, not an invitation to refresh whichever
+    # scheduled interval happens to be due at the same instant. build_cache()
+    # below applies the requested block explicitly.
+    if forced_refresh_blocks():
+        return {"main": False, "system": False, "now": time.time()}
 
     if not CACHE.exists():
         return {"main": True, "system": True, "now": time.time()}
@@ -282,11 +365,20 @@ def load_config() -> dict:
         data = json.loads(CONFIG.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("config is not a JSON object")
-    except Exception:
-        data = {}
+    except Exception as exc:
+        # Never pretend a corrupt user config is an empty/default config. Doing
+        # so can make the UI appear reset and a later save can overwrite the
+        # only copy of hand-edited feeds or API keys. Keep the last good cache
+        # and fail the refresh instead.
+        raise RuntimeError(f"invalid config.json: {type(exc).__name__}") from exc
 
     data.setdefault("feeds", copy.deepcopy(DEFAULT_CONFIG["feeds"]))
     data.setdefault("weather_locations", copy.deepcopy(DEFAULT_CONFIG["weather_locations"]))
+    weather = data.setdefault("weather", copy.deepcopy(DEFAULT_CONFIG.get("weather", {"openweather_api_key": ""})))
+    if not isinstance(weather, dict):
+        weather = copy.deepcopy(DEFAULT_CONFIG.get("weather", {"openweather_api_key": ""}))
+        data["weather"] = weather
+    weather.setdefault("openweather_api_key", DEFAULT_CONFIG.get("weather", {}).get("openweather_api_key", ""))
     data.setdefault("nina_codes", copy.deepcopy(DEFAULT_CONFIG["nina_codes"]))
     data.setdefault("prayer", copy.deepcopy(DEFAULT_CONFIG["prayer"]))
     data.setdefault("system", copy.deepcopy(DEFAULT_CONFIG["system"]))
@@ -349,11 +441,11 @@ def clean(text: str | None, limit: int = 220) -> str:
 def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
-def first_child_text(item: ET.Element, wanted: str) -> str:
+def first_child_text(item: ET.Element, wanted: str, limit: int = 220) -> str:
     wanted = wanted.lower()
     for child in list(item):
         if local_name(str(child.tag)) == wanted and child.text:
-            return clean(child.text)
+            return clean(child.text, limit=limit)
     return ""
 
 def item_title(item: ET.Element) -> str:
@@ -378,7 +470,286 @@ def all_items(root: ET.Element):
         if tag in ("item", "entry"):
             yield elem
 
-def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retries: int = 1, headers: dict[str, str] | None = None) -> str:
+class NotModified(Exception):
+    """Raised when a conditional GET was answered with HTTP 304.
+
+    This is a success, not a failure: the feed simply has not changed since
+    the ETag / Last-Modified we sent. Callers keep the previously cached
+    items and reset the failure counter.
+    """
+
+    def __init__(self, meta: dict | None = None):
+        super().__init__("not modified")
+        self.meta = meta or {}
+
+
+class OversizeResponse(Exception):
+    """Raised when a response exceeds the byte cap.
+
+    Truncating and parsing anyway produced silently broken feeds before, so
+    an explicit failure is the honest outcome.
+    """
+
+
+def _decompress_limited(raw: bytes, wbits: int, limit: int) -> bytes:
+    """Inflate with a hard output cap.
+
+    gzip.decompress() and zlib.decompress() expand without bound, so the byte
+    cap on the download only limited the *compressed* size. A small, highly
+    compressible document could still inflate to hundreds of megabytes. This
+    feeds the stream through in chunks and stops the moment the output would
+    exceed the cap.
+    """
+    obj = zlib.decompressobj(wbits)
+    out = bytearray()
+    view = memoryview(raw)
+    step = 65536
+    for start in range(0, len(view), step):
+        out += obj.decompress(bytes(view[start:start + step]), limit - len(out) + 1)
+        if len(out) > limit:
+            raise OversizeResponse(f"decompressed body larger than {limit} bytes")
+        if obj.eof:
+            break
+    tail = obj.flush()
+    if len(out) + len(tail) > limit:
+        raise OversizeResponse(f"decompressed body larger than {limit} bytes")
+    return bytes(out + tail)
+
+
+def _decode_body(raw: bytes, response, max_bytes: int = 1_500_000) -> str:
+    encoding = (response.headers.get("Content-Encoding") or "").strip().lower()
+    # Allow a generous expansion factor for XML, which compresses very well,
+    # while still bounding the result.
+    limit = max(max_bytes, 4 * 1024 * 1024)
+    if encoding in ("gzip", "x-gzip"):
+        try:
+            raw = _decompress_limited(raw, 16 + zlib.MAX_WBITS, limit)
+        except OversizeResponse:
+            raise
+        except Exception as exc:
+            raise ValueError(f"broken gzip response: {exc}") from exc
+    elif encoding == "deflate":
+        try:
+            raw = _decompress_limited(raw, zlib.MAX_WBITS, limit)
+        except OversizeResponse:
+            raise
+        except Exception:
+            try:
+                raw = _decompress_limited(raw, -zlib.MAX_WBITS, limit)
+            except OversizeResponse:
+                raise
+            except Exception as exc:
+                raise ValueError(f"broken deflate response: {exc}") from exc
+
+    charset = response.headers.get_content_charset()
+    if not charset:
+        # Sniff the XML declaration before falling back to UTF-8. A few
+        # regional feeds still ship ISO-8859-1 without a charset header.
+        match = re.search(rb'encoding=["\']([A-Za-z0-9_.-]+)["\']', raw[:200])
+        charset = match.group(1).decode("ascii", "replace") if match else "utf-8"
+    try:
+        return raw.decode(charset, "replace")
+    except LookupError:
+        return raw.decode("utf-8", "replace")
+
+
+# ---------------------------------------------------------------------------
+# Human-readable network diagnostics
+# ---------------------------------------------------------------------------
+# Before v2.1.0 a failed feed produced a bare exception class name such as
+# "Tagesschau: HTTPError". That told the user nothing: an HTTPError can be a
+# 403 from a publisher that blocks VPN exit nodes, a 429 rate limit, a 451
+# geo-block or a 503 from an overloaded origin, and each of those calls for a
+# completely different reaction. classify_error() maps the exception onto a
+# small set of causes with a plain-language explanation in both UI languages.
+
+class EmptyFeed(RuntimeError):
+    """The feed parsed correctly but contained no usable entries."""
+
+
+ERROR_TEXTS = {
+    "blocked": (
+        "Zugriff vom Anbieter blockiert",
+        "blocked by the publisher",
+    ),
+    "geo_blocked": (
+        "aus dieser Region gesperrt",
+        "blocked in this region",
+    ),
+    "rate_limited": (
+        "zu viele Abrufe, kurzzeitig gesperrt",
+        "rate limited, temporarily refused",
+    ),
+    "not_found": (
+        "Feed-Adresse existiert nicht mehr",
+        "feed address no longer exists",
+    ),
+    "server_error": (
+        "Server des Anbieters hat einen Fehler gemeldet",
+        "the publisher's server reported an error",
+    ),
+    "dns": (
+        "Adresse ließ sich nicht auflösen (DNS)",
+        "hostname could not be resolved (DNS)",
+    ),
+    "offline": (
+        "keine Netzwerkverbindung",
+        "no network connection",
+    ),
+    "timeout": (
+        "Zeitüberschreitung",
+        "timed out",
+    ),
+    "tls": (
+        "TLS-/Zertifikatsproblem",
+        "TLS/certificate problem",
+    ),
+    "refused": (
+        "Verbindung abgewiesen",
+        "connection refused",
+    ),
+    "too_large": (
+        "Antwort zu groß",
+        "response too large",
+    ),
+    "parse": (
+        "Antwort war kein gültiger Feed",
+        "response was not a valid feed",
+    ),
+    "empty": (
+        "Feed enthielt keine Meldungen",
+        "feed contained no entries",
+    ),
+    "unknown": (
+        "unbekannter Fehler",
+        "unknown error",
+    ),
+}
+
+# Causes that usually mean "the network path is wrong", not "this one site is
+# broken". When several feeds fail this way at once and a VPN is up, the VPN
+# is the far more likely culprit than eight publishers failing simultaneously.
+CONNECTIVITY_KINDS = {"dns", "offline", "timeout", "tls", "refused"}
+# Causes that specifically smell of a datacenter/VPN exit IP being filtered.
+FILTERED_KINDS = {"blocked", "geo_blocked", "rate_limited"}
+
+
+def classify_error(exc: BaseException) -> dict:
+    """Turn an exception into {kind, http, de, en, detail}."""
+    kind = "unknown"
+    http_status = 0
+    detail = ""
+
+    if isinstance(exc, OversizeResponse):
+        kind = "too_large"
+    elif isinstance(exc, urllib.error.HTTPError):
+        http_status = int(getattr(exc, "code", 0) or 0)
+        if http_status in (401, 402, 403):
+            kind = "blocked"
+        elif http_status == 404 or http_status == 410:
+            kind = "not_found"
+        elif http_status == 429:
+            kind = "rate_limited"
+        elif http_status == 451:
+            kind = "geo_blocked"
+        elif 500 <= http_status < 600:
+            kind = "server_error"
+        elif 400 <= http_status < 500:
+            kind = "blocked"
+        else:
+            kind = "server_error"
+    elif isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        text = str(reason or exc).lower()
+        # Check the wrapped exception's TYPE before its message. Matching only
+        # on words like "certificate" misclassified any SSL error whose text
+        # happened not to contain them, which is easy to hit with a custom
+        # verification failure or a localised OpenSSL build.
+        if isinstance(reason, ssl.SSLError):
+            kind = "tls"
+        elif isinstance(reason, socket.gaierror) or "name or service not known" in text \
+                or "temporary failure in name resolution" in text or "nodename nor servname" in text:
+            kind = "dns"
+        elif "certificate" in text or "ssl" in text or "tls" in text:
+            kind = "tls"
+        elif "timed out" in text or "timeout" in text:
+            kind = "timeout"
+        elif "network is unreachable" in text or "no route to host" in text or "unreachable" in text:
+            kind = "offline"
+        elif "connection refused" in text or "refused" in text:
+            kind = "refused"
+        else:
+            kind = "offline"
+        detail = str(reason or "")[:120]
+    elif isinstance(exc, ssl.SSLError):
+        kind = "tls"
+    elif isinstance(exc, socket.gaierror):
+        kind = "dns"
+    elif isinstance(exc, (socket.timeout, TimeoutError)):
+        kind = "timeout"
+    elif isinstance(exc, ConnectionRefusedError):
+        kind = "refused"
+    elif isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ConnectionError)):
+        kind = "offline"
+    elif isinstance(exc, ET.ParseError):
+        kind = "parse"
+    elif isinstance(exc, EmptyFeed):
+        kind = "empty"
+    elif isinstance(exc, OSError):
+        # Anything else the socket layer raises (EHOSTUNREACH, ENETDOWN, ...).
+        # Without this these fell through to "unknown", which is exactly the
+        # uninformative label this whole classifier exists to remove.
+        text = str(exc).lower()
+        if "unreachable" in text or "no route" in text:
+            kind = "offline"
+        elif "timed out" in text or "timeout" in text:
+            kind = "timeout"
+        else:
+            kind = "offline"
+        detail = str(exc)[:120]
+    elif isinstance(exc, (ValueError, RuntimeError)):
+        text = str(exc).lower()
+        if "no items" in text or "empty" in text:
+            kind = "empty"
+        else:
+            kind = "parse"
+        detail = str(exc)[:120]
+
+    de, en = ERROR_TEXTS.get(kind, ERROR_TEXTS["unknown"])
+    return {
+        "kind": kind,
+        "http": http_status,
+        "de": de,
+        "en": en,
+        "detail": detail,
+    }
+
+
+def error_message(info: dict, language: str = "de") -> str:
+    """Short one-line message shown next to a feed name."""
+    text = info.get("en" if language == "en" else "de", "")
+    status = int(info.get("http") or 0)
+    if status:
+        return f"{text} (HTTP {status})"
+    return text
+
+
+
+def urlopen_full(
+    url: str,
+    timeout: int = 15,
+    max_bytes: int = 1_500_000,
+    retries: int = 1,
+    headers: dict[str, str] | None = None,
+    etag: str = "",
+    last_modified: str = "",
+) -> tuple[str, dict]:
+    """Fetch a URL and return (text, meta).
+
+    meta carries the validators needed for the next conditional request plus
+    the observed HTTP status and round-trip time, which the News block shows
+    in its per-feed diagnostics.
+    """
     # Refuse anything that isn't plain HTTP(S). urllib happily handles file://
     # and ftp:// otherwise, which would let a malicious config exfiltrate
     # local files via the feed parser. The check is cheap and only runs once
@@ -392,26 +763,52 @@ def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retrie
     request_headers = {
         "User-Agent": UA,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, application/json, */*",
+        # Feeds are highly compressible XML; asking for gzip typically cuts
+        # transfer size by 70-80 %. urllib does not negotiate this on its own
+        # and does not decompress, so _decode_body() handles the response.
+        "Accept-Encoding": "gzip, deflate",
     }
+    if etag:
+        request_headers["If-None-Match"] = str(etag)
+    if last_modified:
+        request_headers["If-Modified-Since"] = str(last_modified)
     if headers:
         request_headers.update({str(k): str(v) for k, v in headers.items() if v is not None})
 
-    req = urllib.request.Request(
-        url,
-        headers=request_headers,
-    )
+    req = urllib.request.Request(url, headers=request_headers)
 
     last_exc = None
     for attempt in range(retries + 1):
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
-                raw = response.read(max_bytes)
-                charset = response.headers.get_content_charset() or "utf-8"
-                return raw.decode(charset, "replace")
+                # Read one byte past the cap so an oversized body fails loudly
+                # instead of being silently truncated into invalid XML.
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
+                    raise OversizeResponse(f"response larger than {max_bytes} bytes")
+                meta = {
+                    "status": int(getattr(response, "status", 200) or 200),
+                    "etag": (response.headers.get("ETag") or "").strip(),
+                    "last_modified": (response.headers.get("Last-Modified") or "").strip(),
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }
+                return _decode_body(raw, response, max_bytes), meta
         except urllib.error.HTTPError as exc:
+            if exc.code == 304:
+                raise NotModified({
+                    "status": 304,
+                    "etag": etag,
+                    "last_modified": last_modified,
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }) from None
             last_exc = exc
+            # 4xx answers are deterministic: retrying the same request against
+            # the same endpoint cannot turn a 403 into a 200.
             if 400 <= exc.code < 500:
                 raise
+        except OversizeResponse:
+            raise
         except Exception as exc:
             last_exc = exc
 
@@ -422,27 +819,582 @@ def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retrie
         raise last_exc
     raise RuntimeError("request failed")
 
-def fetch_feed(url: str, limit: int) -> list[dict[str, str]]:
-    data = urlopen_text(url)
+
+def urlopen_text(url: str, timeout: int = 15, max_bytes: int = 1_500_000, retries: int = 1, headers: dict[str, str] | None = None) -> str:
+    text, _meta = urlopen_full(url, timeout=timeout, max_bytes=max_bytes, retries=retries, headers=headers)
+    return text
+
+# ---------------------------------------------------------------------------
+# Feed state: conditional GET validators and per-feed failure history
+# ---------------------------------------------------------------------------
+# Kept in its own small file next to the cache. It holds only bookkeeping
+# (ETag, Last-Modified, last success, consecutive failures), never article
+# content, so deleting it costs at most one extra full feed download.
+
+FEED_STATE_FILE = OUT_DIR / "feedstate.json"
+
+# Back off on a per-feed basis after repeated failures so a publisher that
+# blocks the current exit IP is not hammered every ten minutes. The list is
+# indexed by consecutive failure count and gives the minimum wait in minutes.
+FEED_BACKOFF_MINUTES = [0, 0, 5, 15, 30, 60, 120]
+FEED_BACKOFF_MAX_MINUTES = 240
+
+
+def load_feed_state() -> dict:
+    try:
+        data = json.loads(FEED_STATE_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def save_feed_state(state: dict) -> None:
+    try:
+        atomic_write_json(FEED_STATE_FILE, state)
+    except Exception:
+        # Losing the validator cache only costs bandwidth, never correctness.
+        pass
+
+
+def feed_state_key(name: str, url: str) -> str:
+    return f"{str(name or '').strip()}|{str(url or '').strip()}"
+
+
+def feed_backoff_seconds(failures: int) -> int:
+    if failures <= 1:
+        return 0
+    if failures < len(FEED_BACKOFF_MINUTES):
+        return FEED_BACKOFF_MINUTES[failures] * 60
+    return FEED_BACKOFF_MAX_MINUTES * 60
+
+
+def parse_feed_datetime(value: str) -> int | None:
+    """Parse RFC 822 (RSS) or ISO 8601 (Atom) timestamps into a UTC epoch."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    try:
+        parsed = email.utils.parsedate_to_datetime(text)
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp())
+    except Exception:
+        pass
+
+    iso = text.replace("Z", "+00:00")
+    # Trim fractional seconds longer than six digits, which fromisoformat rejects.
+    iso = re.sub(r"(\.\d{6})\d+", r"\1", iso)
+    try:
+        parsed = datetime.fromisoformat(iso)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+    except Exception:
+        return None
+
+
+def item_published(item: ET.Element) -> int | None:
+    for tag in ("pubdate", "published", "updated", "date", "created"):
+        value = first_child_text(item, tag, limit=80)
+        if value:
+            epoch = parse_feed_datetime(value)
+            if epoch is not None:
+                return epoch
+    return None
+
+
+def item_identity(item: ET.Element, link: str, title: str) -> str:
+    guid = first_child_text(item, "guid", limit=200) or first_child_text(item, "id", limit=200)
+    return guid or link or title
+
+
+def parse_feed_document(data: str, limit: int) -> list[dict]:
     root = safe_xml_fromstring(data)
 
-    entries = []
+    entries: list[dict] = []
     for item in all_items(root):
         title = item_title(item)
         if not title:
             continue
 
-        entries.append({
-            "title": title,
-            "link": item_link(item),
-        })
+        link = item_link(item)
+        entry: dict = {"title": title, "link": link}
+
+        published = item_published(item)
+        if published is not None:
+            entry["published"] = published
+
+        identity = item_identity(item, link, title)
+        if identity:
+            entry["id"] = identity
+
+        entries.append(entry)
 
         if len(entries) >= limit:
             break
 
     return entries
 
-def fetch_weather_one(name: str, lat: float, lon: float, language: str = "de") -> dict[str, str]:
+
+def fetch_feed(url: str, limit: int, etag: str = "", last_modified: str = "") -> tuple[list[dict], dict]:
+    """Fetch and parse one feed. Raises NotModified when nothing changed."""
+    data, meta = urlopen_full(url, timeout=12, etag=etag, last_modified=last_modified)
+    entries = parse_feed_document(data, limit)
+    if not entries:
+        raise EmptyFeed("feed contained no entries")
+    return entries, meta
+
+
+def fetch_all_feeds(config: dict, old: dict, language: str = "de") -> tuple[list[dict], list[str], dict]:
+    """Fetch every configured feed in parallel and return (feeds, errors, status).
+
+    Sequential fetching was the single worst latency source in the widget: with
+    eleven feeds, a 15 s timeout and one retry each, a flaky connection could
+    keep a refresh busy for minutes and block the systemd unit. A small thread
+    pool keeps the wall-clock cost close to the slowest single feed while
+    staying polite: six concurrent connections spread over different hosts.
+    """
+    feed_configs = config.get("feeds", [])
+    if not isinstance(feed_configs, list):
+        feed_configs = []
+
+    state = load_feed_state()
+    now = time.time()
+    results: dict[int, dict] = {}
+
+    def work(index: int, feed: dict) -> tuple[int, dict]:
+        name = str(feed.get("name", "Feed")).strip() or "Feed"
+        url = str(feed.get("url", "")).strip()
+        try:
+            limit = int(feed.get("limit", 5) or 5)
+        except Exception:
+            limit = 5
+        limit = max(1, min(50, limit))
+
+        key = feed_state_key(name, url)
+        entry_state = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+        failures = int(entry_state.get("failures", 0) or 0)
+        next_try = float(entry_state.get("next_try", 0) or 0)
+
+        # Honour the backoff window, but never let a feed go dark forever:
+        # a forced refresh always retries immediately.
+        if next_try and now < next_try and not manual_refresh():
+            wait_minutes = max(1, int((next_try - now) / 60))
+            return index, {
+                "name": name,
+                "url": url,
+                "items": old_items(old, name, url),
+                "state": dict(entry_state),
+                "skipped": True,
+                "error": {
+                    "kind": entry_state.get("last_kind", "unknown"),
+                    "http": int(entry_state.get("last_http", 0) or 0),
+                    "wait_minutes": wait_minutes,
+                },
+            }
+
+        try:
+            items, meta = fetch_feed(
+                url,
+                limit,
+                etag=str(entry_state.get("etag", "") or ""),
+                last_modified=str(entry_state.get("last_modified", "") or ""),
+            )
+            return index, {
+                "name": name,
+                "url": url,
+                "items": items,
+                "state": {
+                    "etag": meta.get("etag", ""),
+                    "last_modified": meta.get("last_modified", ""),
+                    "last_ok": now,
+                    "failures": 0,
+                    "next_try": 0,
+                    "elapsed_ms": meta.get("elapsed_ms", 0),
+                    "last_kind": "",
+                    "last_http": 0,
+                },
+                "error": None,
+            }
+        except NotModified as exc:
+            meta = getattr(exc, "meta", {}) or {}
+            merged = dict(entry_state)
+            merged.update({
+                "last_ok": now,
+                "failures": 0,
+                "next_try": 0,
+                "elapsed_ms": meta.get("elapsed_ms", 0),
+                "last_kind": "",
+                "last_http": 0,
+            })
+            return index, {
+                "name": name,
+                "url": url,
+                "items": old_items(old, name, url),
+                "state": merged,
+                "unchanged": True,
+                "error": None,
+            }
+        except Exception as exc:
+            info = classify_error(exc)
+            failures += 1
+            merged = dict(entry_state)
+            merged.update({
+                "failures": failures,
+                "next_try": now + feed_backoff_seconds(failures),
+                "last_kind": info.get("kind", "unknown"),
+                "last_http": info.get("http", 0),
+            })
+            # Drop stale validators after a hard failure so the next successful
+            # attempt refetches the full document rather than trusting an ETag
+            # that may belong to an error page.
+            if info.get("kind") in ("not_found", "parse", "blocked"):
+                merged["etag"] = ""
+                merged["last_modified"] = ""
+            return index, {
+                "name": name,
+                "url": url,
+                "items": old_items(old, name, url),
+                "state": merged,
+                "error": info,
+            }
+
+    if feed_configs:
+        workers = max(1, min(6, len(feed_configs)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(work, index, feed): (index, feed)
+                for index, feed in enumerate(feed_configs)
+                if isinstance(feed, dict)
+            }
+            for future in concurrent.futures.as_completed(futures):
+                original_index, feed = futures[future]
+                try:
+                    index, payload = future.result()
+                    results[index] = payload
+                except Exception as exc:
+                    # work() already converts ordinary fetch/parser failures to
+                    # structured feed errors. Reaching this branch therefore
+                    # means an unexpected worker bug. Never let that make a
+                    # configured feed silently disappear from the UI/status.
+                    name = str(feed.get("name", "Feed")).strip() or "Feed"
+                    url = str(feed.get("url", "")).strip()
+                    key = feed_state_key(name, url)
+                    entry_state = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+                    failures = int(entry_state.get("failures", 0) or 0) + 1
+                    info = classify_error(exc)
+                    merged = dict(entry_state)
+                    merged.update({
+                        "failures": failures,
+                        "next_try": now + feed_backoff_seconds(failures),
+                        "last_kind": info.get("kind", "unknown"),
+                        "last_http": info.get("http", 0),
+                    })
+                    results[original_index] = {
+                        "name": name,
+                        "url": url,
+                        "items": old_items(old, name, url),
+                        "state": merged,
+                        "error": info,
+                    }
+
+    feeds: list[dict] = []
+    errors: list[str] = []
+    failed_kinds: list[str] = []
+    ok_count = 0
+
+    for index in sorted(results):
+        payload = results[index]
+        name = payload["name"]
+        entry_state = payload.get("state", {})
+        state[feed_state_key(name, payload["url"])] = entry_state
+
+        info = payload.get("error")
+        feed_entry: dict = {
+            "name": name,
+            "url": payload["url"],
+            "items": payload.get("items", []),
+        }
+
+        last_ok = float(entry_state.get("last_ok", 0) or 0)
+        if last_ok:
+            feed_entry["last_ok"] = int(last_ok)
+        if entry_state.get("elapsed_ms"):
+            feed_entry["elapsed_ms"] = int(entry_state.get("elapsed_ms", 0) or 0)
+
+        if info is None:
+            ok_count += 1
+            feed_entry["ok"] = True
+        else:
+            kind = info.get("kind", "unknown")
+            failed_kinds.append(kind)
+            feed_entry["ok"] = False
+            feed_entry["stale"] = bool(feed_entry["items"])
+            if payload.get("skipped"):
+                wait = int(info.get("wait_minutes", 0) or 0)
+                retry_de = f"neuer Versuch in {wait} Min."
+                retry_en = f"retrying in {wait} min"
+                feed_entry["error"] = {
+                    "kind": kind,
+                    "http": int(info.get("http", 0) or 0),
+                    "message": retry_de if language != "en" else retry_en,
+                    "paused": True,
+                }
+            else:
+                feed_entry["error"] = {
+                    "kind": kind,
+                    "http": int(info.get("http", 0) or 0),
+                    "message": error_message(info, language),
+                    "paused": False,
+                }
+            errors.append(f"{name}: {feed_entry['error']['message']}")
+
+        feeds.append(feed_entry)
+
+    # Forget state for feeds that are no longer configured, so removing a feed
+    # does not leave its ETag and failure counter behind for ever.
+    live_keys = {feed_state_key(f.get("name", ""), f.get("url", "")) for f in feed_configs if isinstance(f, dict)}
+    state = {k: v for k, v in state.items() if k in live_keys}
+    save_feed_state(state)
+
+    return feeds, errors, build_news_status(ok_count, failed_kinds, language)
+
+
+def build_news_status(ok_count: int, failed_kinds: list[str], language: str = "de") -> dict:
+    """Summarise the overall news fetch into one calm, actionable sentence.
+
+    Eleven separate red error strings tell the user nothing they can act on.
+    One sentence naming the likely cause does.
+    """
+    fail_count = len(failed_kinds)
+    total = ok_count + fail_count
+    status = {
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "total": total,
+        "severity": "ok",
+        "summary": "",
+        "hint": "",
+        "vpn": False,
+    }
+
+    if fail_count == 0 or total == 0:
+        return status
+
+    english = language == "en"
+    connectivity = sum(1 for kind in failed_kinds if kind in CONNECTIVITY_KINDS)
+    filtered = sum(1 for kind in failed_kinds if kind in FILTERED_KINDS)
+    vpn_names = detected_vpn_names()
+    status["vpn"] = bool(vpn_names)
+    vpn_label = ", ".join(vpn_names[:2])
+
+    partial = fail_count < total
+    status["severity"] = "warning" if partial else "error"
+
+    if english:
+        status["summary"] = (
+            f"{fail_count} of {total} sources unavailable"
+            if partial else
+            f"No source could be reached ({total})"
+        )
+    else:
+        status["summary"] = (
+            f"{fail_count} von {total} Quellen nicht erreichbar"
+            if partial else
+            f"Keine Quelle erreichbar ({total})"
+        )
+
+    # The interesting part: name the most plausible cause instead of dumping
+    # exception class names on the user.
+    # A real majority is strictly more than half. The old test used
+    # `>= max(2, fail_count // 2)`, so two filtered sources out of five counted
+    # as a majority and produced a confident VPN explanation on thin evidence.
+    def majority(count: int) -> bool:
+        return count * 2 > fail_count and count >= 2
+
+    majority_connectivity = majority(connectivity)
+    majority_filtered = majority(filtered)
+
+    if vpn_names and majority_filtered:
+        # Say what was observed first, and offer the VPN only as a possibility.
+        # A running tunnel daemon does not prove that web traffic leaves through
+        # it: Tailscale without an exit node, or a split-tunnel setup, routes
+        # normal browsing straight out of the local uplink.
+        status["hint"] = (
+            f"Several publishers are refusing this connection. If {vpn_label} routes your web traffic, its exit address is the likely reason."
+            if english else
+            f"Mehrere Anbieter lehnen diese Verbindung ab. Falls {vpn_label} den Web-Verkehr leitet, ist dessen Exit-Adresse die wahrscheinliche Ursache."
+        )
+    elif vpn_names and majority_connectivity:
+        status["hint"] = (
+            f"Names or routes are not resolving. If {vpn_label} carries this traffic, check it and its DNS setting."
+            if english else
+            f"Namen oder Routen lösen nicht auf. Falls {vpn_label} diesen Verkehr führt, dieses und dessen DNS-Einstellung prüfen."
+        )
+    elif majority_connectivity and not vpn_names:
+        status["hint"] = (
+            "The network looks unreachable. Cached headlines are shown."
+            if english else
+            "Das Netzwerk scheint nicht erreichbar. Es werden zwischengespeicherte Meldungen angezeigt."
+        )
+    elif majority_filtered:
+        status["hint"] = (
+            "The publishers are refusing this connection. Cached headlines are shown."
+            if english else
+            "Die Anbieter lehnen diese Verbindung ab. Es werden zwischengespeicherte Meldungen angezeigt."
+        )
+    else:
+        status["hint"] = (
+            "Cached headlines are shown for the affected sources."
+            if english else
+            "Für die betroffenen Quellen werden zwischengespeicherte Meldungen angezeigt."
+        )
+
+    return status
+
+
+def _epoch_clock(epoch_value, utc_offset_seconds: int = 0) -> str:
+    try:
+        stamp = int(epoch_value) + int(utc_offset_seconds or 0)
+        return datetime.fromtimestamp(stamp, timezone.utc).strftime("%H:%M")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "--"
+
+
+def fetch_openweather_one(name: str, lat: float, lon: float, api_key: str, language: str = "de") -> dict[str, object]:
+    """Fetch OpenWeather current conditions plus today's forecast totals.
+
+    The free OpenWeather tier exposes current conditions and the 5-day/3-hour
+    forecast. Current conditions are the required request. The forecast call is
+    deliberately best-effort: if it fails, the widget still shows the current
+    reading instead of discarding an otherwise valid location.
+    """
+    common = {
+        "lat": str(lat),
+        "lon": str(lon),
+        "appid": api_key,
+        "units": "metric",
+        "lang": "en" if language == "en" else "de",
+    }
+    current_url = "https://api.openweathermap.org/data/2.5/weather?" + urllib.parse.urlencode(common)
+    current = json.loads(urlopen_text(current_url, timeout=12))
+
+    forecast = {}
+    try:
+        forecast_url = "https://api.openweathermap.org/data/2.5/forecast?" + urllib.parse.urlencode(common)
+        forecast = json.loads(urlopen_text(forecast_url, timeout=12))
+    except Exception:
+        # Current weather is still useful if the forecast endpoint alone fails.
+        forecast = {}
+
+    main = current.get("main") or {}
+    wind_data = current.get("wind") or {}
+    sys_data = current.get("sys") or {}
+    weather_list = current.get("weather") or []
+    weather0 = weather_list[0] if weather_list and isinstance(weather_list[0], dict) else {}
+
+    condition = str(weather0.get("description") or ("Weather" if language == "en" else "Wetter")).strip()
+    if condition:
+        condition = condition[:1].upper() + condition[1:]
+    temp = main.get("temp")
+    humidity = main.get("humidity")
+    apparent = main.get("feels_like")
+
+    # OpenWeather's metric wind values are metres/second; the existing widget
+    # schema and Open-Meteo path display kilometres/hour.
+    def ms_to_kmh(value):
+        try:
+            return float(value) * 3.6
+        except (TypeError, ValueError):
+            return None
+
+    wind = ms_to_kmh(wind_data.get("speed"))
+    gusts = ms_to_kmh(wind_data.get("gust"))
+    offset = int(current.get("timezone") or 0)
+    local_time = _epoch_clock(current.get("dt"), offset)
+    sunrise = _epoch_clock(sys_data.get("sunrise"), offset)
+    sunset = _epoch_clock(sys_data.get("sunset"), offset)
+
+    # Sum the 3-hour forecast buckets belonging to the location's current
+    # local date. This keeps the existing "Rain/Snow today" display semantics.
+    precipitation = 0.0
+    snow = 0.0
+    forecast_seen = False
+    try:
+        local_date = datetime.fromtimestamp(int(current.get("dt")) + offset, timezone.utc).date()
+        forecast_offset = int((forecast.get("city") or {}).get("timezone", offset) or 0)
+        for row in forecast.get("list") or []:
+            if not isinstance(row, dict):
+                continue
+            row_date = datetime.fromtimestamp(int(row.get("dt")) + forecast_offset, timezone.utc).date()
+            if row_date != local_date:
+                continue
+            forecast_seen = True
+            precipitation += float((row.get("rain") or {}).get("3h") or 0.0)
+            snow += float((row.get("snow") or {}).get("3h") or 0.0)
+    except (TypeError, ValueError, OSError, OverflowError):
+        forecast_seen = False
+
+    def num(value, suffix=""):
+        try: return f"{float(value):.1f}{suffix}"
+        except Exception: return f"--{suffix}"
+    def opt(value, suffix="", nonzero=False):
+        try:
+            if value is None: return ""
+            v=float(value)
+            if nonzero and abs(v) < 0.05: return ""
+            return f"{v:.1f}{suffix}"
+        except Exception: return ""
+    def pct(value):
+        try: return "" if value is None else f"{float(value):.0f}%"
+        except Exception: return ""
+
+    temp_text=num(temp, " °C")
+    apparent_text=opt(apparent, " °C")
+    humidity_text=pct(humidity)
+    wind_text=opt(wind, " km/h", True)
+    gusts_text=opt(gusts, " km/h", True)
+    precipitation_text=opt(precipitation if forecast_seen else None, " mm", True)
+    snow_text=opt(snow if forecast_seen else None, " mm", True)
+    sun_text=f"{sunrise}–{sunset}"
+    parts=[]
+    if language == "en":
+        if apparent_text: parts.append(f"Feels like {apparent_text}")
+        if humidity_text: parts.append(f"Humidity {humidity_text}")
+        parts.append(f"Sun {sun_text}")
+        if wind_text: parts.append(f"Wind {wind_text}")
+        if gusts_text: parts.append(f"Gusts {gusts_text}")
+        if precipitation_text: parts.append(f"Rain forecast {precipitation_text}")
+        if snow_text: parts.append(f"Snow forecast {snow_text}")
+    else:
+        if apparent_text: parts.append(f"Gefühlt {apparent_text}")
+        if humidity_text: parts.append(f"Luftfeuchte {humidity_text}")
+        parts.append(f"Sonne {sun_text}")
+        if wind_text: parts.append(f"Wind {wind_text}")
+        if gusts_text: parts.append(f"Böen {gusts_text}")
+        if precipitation_text: parts.append(f"Regenprognose {precipitation_text}")
+        if snow_text: parts.append(f"Schneeprognose {snow_text}")
+
+    return {
+        "name": name, "latitude": lat, "longitude": lon, "provider": "openweather",
+        "condition": condition, "temperature": temp, "humidity": humidity,
+        "apparent_temperature": apparent, "wind_speed": wind, "wind_gusts": gusts,
+        "local_time": local_time, "utc_offset_seconds": offset,
+        "timezone": "", "timezone_abbreviation": "",
+        "summary": f"{condition}, {temp_text}", "details": " · ".join(parts),
+        "last_ok": int(time.time()),
+    }
+
+def fetch_weather_one(name: str, lat: float, lon: float, language: str = "de", weather_config: dict | None = None) -> dict[str, object]:
+    weather_config = weather_config if isinstance(weather_config, dict) else {}
+    openweather_key = str(weather_config.get("openweather_api_key") or "").strip()
+    if openweather_key:
+        return fetch_openweather_one(name, lat, lon, openweather_key, language)
+
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
@@ -516,7 +1468,7 @@ def fetch_weather_one(name: str, lat: float, lon: float, language: str = "de") -
     humidity_text = fmt_optional_percent(humidity)
     apparent_text = fmt_optional_number(apparent, " °C")
     precipitation_text = fmt_optional_nonzero_number(precipitation, " mm")
-    snow_text = fmt_optional_nonzero_number(snow, " mm")
+    snow_text = fmt_optional_nonzero_number(snow, " cm")
     sun_text = f"{fmt_time(sunrise)}–{fmt_time(sunset)}"
 
     if language == "en":
@@ -552,6 +1504,12 @@ def fetch_weather_one(name: str, lat: float, lon: float, language: str = "de") -
 
     return {
         "name": name,
+        # Coordinates are part of the cache identity.  A display name alone is
+        # not stable: a user can repoint "Berlin" to another place, or keep two
+        # locations with the same label.
+        "latitude": lat,
+        "longitude": lon,
+        "provider": "open-meteo",
         "condition": condition,
         "temperature": temp,
         "humidity": humidity,
@@ -564,6 +1522,9 @@ def fetch_weather_one(name: str, lat: float, lon: float, language: str = "de") -
         "timezone_abbreviation": timezone_abbreviation,
         "summary": f"{condition}, {temp_text}",
         "details": " · ".join(detail_parts),
+        # Confirmed-at timestamp, so a cached reading can show its real age
+        # instead of looking indistinguishable from a fresh one.
+        "last_ok": int(time.time()),
     }
 
 def fetch_weather(old: dict, config: dict) -> dict:
@@ -572,6 +1533,8 @@ def fetch_weather(old: dict, config: dict) -> dict:
     errors = []
 
     language = ui_language(config)
+    weather_config = config.get("weather") if isinstance(config.get("weather"), dict) else {}
+    provider_id = "openweather" if str(weather_config.get("openweather_api_key") or "").strip() else "open-meteo"
 
     weather_entries = config.get("weather_locations", [])
     if not weather_entries:
@@ -579,21 +1542,90 @@ def fetch_weather(old: dict, config: dict) -> dict:
             "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
             "items": [],
             "errors": [],
+            "provider": provider_id,
         }
 
-    for entry in weather_entries:
-        try:
-            items.append(fetch_weather_one(entry["name"], float(entry["lat"]), float(entry["lon"]), language))
-        except Exception as exc:
-            errors.append(f"{entry.get('name', 'Ort')}: {type(exc).__name__}")
+    def previous_item(name: str, lat: float, lon: float) -> dict | None:
+        """Return a cached reading only for the exact configured location.
 
-    if not items:
-        items = old_weather.get("items", [])
+        Caches written before v2.1.2 did not store coordinates.  Reusing those
+        by name after a configuration change can put weather from the old city
+        under the new one, so legacy name-only entries are intentionally not
+        reused on a failed fetch.
+        """
+        for candidate in old_weather.get("items", []) or []:
+            if not isinstance(candidate, dict) or candidate.get("name") != name:
+                continue
+            try:
+                old_lat = float(candidate["latitude"])
+                old_lon = float(candidate["longitude"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            candidate_provider = str(candidate.get("provider") or "open-meteo")
+            if candidate_provider != provider_id:
+                continue
+            if abs(old_lat - lat) <= 1e-6 and abs(old_lon - lon) <= 1e-6:
+                return candidate
+        return None
+
+    def weather_failure_payload(entry: dict, exc: Exception) -> dict:
+        name = str(entry.get("name", "Ort"))
+        info = classify_error(exc)
+        # A location that fails should keep showing its last known reading
+        # rather than silently vanishing from the list. The same fallback is
+        # used for an unexpected worker exception below, so a programming bug
+        # cannot erase one configured location from the result either.
+        previous = None
+        try:
+            previous = previous_item(name, float(entry["lat"]), float(entry["lon"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+        if previous:
+            stale = dict(previous)
+            stale["stale"] = True
+            stale["error"] = error_message(info, language)
+            return stale
+        return {"name": name, "failed": True, "error": error_message(info, language)}
+
+    # Fetch every location in parallel. Six locations at 12 s each used to cost
+    # up to 72 s sequentially; now the block costs roughly one request.
+    def work(index: int, entry: dict) -> tuple[int, dict]:
+        name = str(entry.get("name", "Ort"))
+        try:
+            lat = float(entry["lat"])
+            lon = float(entry["lon"])
+            return index, fetch_weather_one(name, lat, lon, language, weather_config)
+        except Exception as exc:
+            return index, weather_failure_payload(entry, exc)
+
+    valid = [entry for entry in weather_entries if isinstance(entry, dict)]
+    results: dict[int, dict] = {}
+    if valid:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(6, len(valid)))) as pool:
+            futures = {pool.submit(work, index, entry): (index, entry) for index, entry in enumerate(valid)}
+            for future in concurrent.futures.as_completed(futures):
+                original_index, entry = futures[future]
+                try:
+                    index, payload = future.result()
+                    results[index] = payload
+                except Exception as exc:
+                    results[original_index] = weather_failure_payload(entry, exc)
+
+    for index in sorted(results):
+        payload = results[index]
+        if payload.get("failed"):
+            # No current reading and nothing cached for this place.
+            errors.append(f"{payload.get('name', 'Ort')}: {payload['error']}")
+            continue
+        if payload.get("stale"):
+            errors.append(f"{payload.get('name', 'Ort')}: {payload.get('error', '')}")
+        items.append(payload)
 
     return {
         "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         "items": items,
         "errors": errors,
+        "provider": provider_id,
     }
 
 
@@ -743,15 +1775,6 @@ def epoch_int(value) -> int | None:
         return int(float(str(value).strip()))
     except Exception:
         return None
-
-def fmt_epoch(value) -> str:
-    ts = epoch_int(value)
-    if ts is None:
-        return ""
-    try:
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return ""
 
 def fmt_epoch_ts(value: int | None) -> str:
     if value is None:
@@ -931,15 +1954,41 @@ def fetch_warning_entry(entry: dict, language: str = "de") -> list[dict[str, str
         return apply_warning_filters(fetch_nina_code(label, code, language), include, exclude)
     return []
 
-def fetch_nina(old: dict, config: dict) -> dict:
-    old_nina = old.get("nina", {})
-    errors = []
-    all_items: list[dict[str, str]] = []
-    locations: list[str] = []
-    seen_keys: set[str] = set()
+def nina_source_key(entry: dict) -> str:
+    """Stable identity for one configured warning area."""
+    return "|".join([
+        str(entry.get("name", "")).strip().lower(),
+        str(entry.get("source", "")).strip().lower(),
+        str(entry.get("code", "")).strip().lower(),
+        str(entry.get("country", "")).strip().lower(),
+        str(entry.get("lat", "")).strip(),
+        str(entry.get("lon", "")).strip(),
+        str(entry.get("url", "")).strip().lower(),
+    ])
 
+
+def fetch_nina(old: dict, config: dict) -> dict:
+    """Official warnings, fetched per configured area.
+
+    This block is the one place in the widget where being quietly wrong is
+    dangerous. Before v2.1.1 a failure was recorded in "errors" and then never
+    shown, and the merged item list was rebuilt from the sources that happened
+    to succeed. So if one area loaded and another failed, a still-valid warning
+    from the failed area simply vanished, and an empty result was rendered as
+    "no warnings" even though a source had not been checked at all.
+
+    Now every source reports its own status. A source that fails keeps its last
+    known warnings, flagged as cached with the time they were last confirmed,
+    and the block as a whole reports that it is incomplete so the UI can say so
+    instead of claiming an all-clear.
+    """
+    old_nina = old.get("nina", {}) if isinstance(old.get("nina"), dict) else {}
+    old_sources = old_nina.get("sources", []) if isinstance(old_nina.get("sources"), list) else []
     language = ui_language(config)
-    warning_entries = config.get("nina_codes", [])
+    english = language == "en"
+    now = time.time()
+
+    warning_entries = [e for e in config.get("nina_codes", []) or [] if isinstance(e, dict)]
 
     if not warning_entries:
         return {
@@ -947,41 +1996,176 @@ def fetch_nina(old: dict, config: dict) -> dict:
             "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
             "items": [],
             "errors": [],
+            "sources": [],
+            "complete": True,
+            "stale_sources": 0,
         }
 
-    for entry in warning_entries:
-        label = str(entry.get("name", "Gebiet")).strip() or "Gebiet"
+    def previous_source(key: str) -> dict:
+        for candidate in old_sources:
+            if isinstance(candidate, dict) and candidate.get("key") == key:
+                return candidate
+        return {}
 
+    def previous_items(key: str) -> list:
+        prev = previous_source(key)
+        items = prev.get("items")
+        return items if isinstance(items, list) else []
+
+    def work(index: int, entry: dict) -> tuple[int, dict]:
+        label = str(entry.get("name", "Gebiet")).strip() or "Gebiet"
+        key = nina_source_key(entry)
         try:
             items = fetch_warning_entry(entry, language)
-            locations.append(label)
-            for item in items:
-                # Deduplicate broad warnings that appear for multiple configured areas.
-                dedup_key = "|".join([
-                    str(item.get("title", "")).strip(),
-                    str(item.get("details", "")).strip(),
-                    str(item.get("severity", "")).strip(),
-                ])
-                if dedup_key and dedup_key not in seen_keys:
-                    seen_keys.add(dedup_key)
-                    all_items.append(item)
+            return index, {
+                "key": key,
+                "label": label,
+                "ok": True,
+                "items": items,
+                "last_ok": int(now),
+            }
         except Exception as exc:
-            errors.append(f"{label}: {type(exc).__name__}: {str(exc)[:80]}")
+            info = classify_error(exc)
+            prev = previous_source(key)
+            cached = previous_items(key)
+            last_ok = int(prev.get("last_ok", 0) or 0)
+            return index, {
+                "key": key,
+                "label": label,
+                "ok": False,
+                # Keep the last known warnings for this area rather than
+                # dropping them; an expired-but-visible warning marked as
+                # cached is far safer than a silent all-clear.
+                "items": cached,
+                "last_ok": last_ok,
+                "stale": bool(cached),
+                "error": {
+                    "kind": info.get("kind", "unknown"),
+                    "http": info.get("http", 0),
+                    "message": error_message(info, language),
+                },
+            }
 
-    if locations:
-        return {
-            "location": ", ".join(locations),
-            "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-            "items": all_items,
-            "errors": errors,
-        }
+    results: dict[int, dict] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(6, len(warning_entries)))) as pool:
+        futures = {pool.submit(work, i, e): (i, e) for i, e in enumerate(warning_entries)}
+        for future in concurrent.futures.as_completed(futures):
+            index, entry = futures[future]
+            try:
+                result_index, payload = future.result()
+                results[result_index] = payload
+            except Exception as exc:
+                # Fail closed. Even an unexpected bug inside the worker must
+                # count as a failed warning source; silently dropping it could
+                # otherwise make complete=True and falsely permit an all-clear.
+                label = str(entry.get("name", "Gebiet")).strip() or "Gebiet"
+                try:
+                    key = nina_source_key(entry)
+                except Exception:
+                    key = f"config-index:{index}"
+                prev = previous_source(key)
+                cached = previous_items(key)
+                info = classify_error(exc)
+                results[index] = {
+                    "key": key,
+                    "label": label,
+                    "ok": False,
+                    "items": cached,
+                    "last_ok": int(prev.get("last_ok", 0) or 0),
+                    "stale": bool(cached),
+                    "error": {
+                        "kind": info.get("kind", "unknown"),
+                        "http": info.get("http", 0),
+                        "message": error_message(info, language),
+                    },
+                }
+
+    all_items: list[dict] = []
+    seen_keys: set[str] = set()
+    sources: list[dict] = []
+    errors: list[str] = []
+    locations: list[str] = []
+    failed_labels: list[str] = []
+    stale_sources = 0
+
+    for index in sorted(results):
+        source = results[index]
+        locations.append(source["label"])
+
+        if not source.get("ok"):
+            failed_labels.append(source["label"])
+            errors.append(f"{source['label']}: {source['error']['message']}")
+            if source.get("stale"):
+                stale_sources += 1
+
+        for item in source.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            dedup_key = "|".join([
+                str(item.get("title", "")).strip(),
+                str(item.get("details", "")).strip(),
+                str(item.get("severity", "")).strip(),
+            ])
+            if not dedup_key or dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            entry_item = dict(item)
+            if not source.get("ok"):
+                # Mark the individual warning so the card can carry a visible
+                # "cached" note; the block-level notice alone is not enough.
+                entry_item["stale"] = True
+                entry_item["source_label"] = source["label"]
+                if source.get("last_ok"):
+                    entry_item["last_ok"] = int(source["last_ok"])
+            all_items.append(entry_item)
+
+        sources.append({
+            "key": source["key"],
+            "label": source["label"],
+            "ok": bool(source.get("ok")),
+            "items": source.get("items", []),
+            "last_ok": int(source.get("last_ok", 0) or 0),
+            "stale": bool(source.get("stale")),
+            "error": source.get("error"),
+        })
+
+    complete = not failed_labels
+    if failed_labels:
+        joined = ", ".join(failed_labels[:3])
+        if len(failed_labels) == len(warning_entries):
+            notice = (
+                f"Warning status could not be updated ({joined})."
+                if english else
+                f"Warnstatus konnte nicht aktualisiert werden ({joined})."
+            )
+        else:
+            notice = (
+                f"Warning status for {joined} could not be updated."
+                if english else
+                f"Warnstatus für {joined} konnte nicht aktualisiert werden."
+            )
+        if stale_sources:
+            notice += (
+                " The last known warnings for those areas are shown."
+                if english else
+                " Es werden die zuletzt bekannten Warnungen dieser Gebiete angezeigt."
+            )
+    else:
+        notice = ""
 
     return {
-        "location": old_nina.get("location", "Gebiet"),
-        "updated": old_nina.get("updated", ""),
-        "items": old_nina.get("items", []),
+        "location": ", ".join(locations),
+        "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+        "items": all_items,
         "errors": errors,
+        "sources": sources,
+        "complete": complete,
+        "stale_sources": stale_sources,
+        "failed_sources": len(failed_labels),
+        "total_sources": len(warning_entries),
+        "notice": notice,
     }
+
 
 def fetch_prayer(old: dict, config: dict) -> dict:
     old_prayer = old.get("prayer", {})
@@ -1039,6 +2223,17 @@ def fetch_prayer(old: dict, config: dict) -> dict:
                 item["epoch"] = epoch_value
             return item
 
+        day_text = str(gregorian.get("date", "") or "").strip()
+        try:
+            for_date = datetime.strptime(day_text, "%d-%m-%Y").date().isoformat() if day_text else ""
+        except Exception:
+            for_date = ""
+        if not for_date:
+            try:
+                for_date = datetime.now(ZoneInfo(timezone_name)).date().isoformat() if ZoneInfo and timezone_name else datetime.now().date().isoformat()
+            except Exception:
+                for_date = datetime.now().date().isoformat()
+
         month = hijri.get("month", {})
         month_en = month.get("en", "") if isinstance(month, dict) else ""
         month_ar = month.get("ar", "") if isinstance(month, dict) else ""
@@ -1076,15 +2271,34 @@ def fetch_prayer(old: dict, config: dict) -> dict:
             "hijri": f"{hijri.get('day', '')}. {month_name} {hijri.get('year', '')}".strip(),
             "items": items,
             "errors": [],
+            "stale": False,
+            "last_ok": int(time.time()),
+            # Calendar day these timings belong to. A cached plan that is no
+            # longer for today is wrong, not merely old, and the UI has to be
+            # able to tell the difference.
+            "for_date": for_date,
+            "timezone": timezone_name,
         }
     except Exception as exc:
+        info = classify_error(exc)
+        previous_items = old_prayer.get("items", [])
+        old_timezone = str(old_prayer.get("timezone", "") or "").strip()
+        try:
+            current_date = datetime.now(ZoneInfo(old_timezone)).date().isoformat() if ZoneInfo and old_timezone else datetime.now().date().isoformat()
+        except Exception:
+            current_date = datetime.now().date().isoformat()
         return {
             "location": old_prayer.get("location", f"{city}, {country}"),
             "method": old_prayer.get("method", method),
             "updated": old_prayer.get("updated", ""),
             "hijri": old_prayer.get("hijri", ""),
-            "items": old_prayer.get("items", []),
-            "errors": [type(exc).__name__],
+            "items": previous_items,
+            "errors": [error_message(info, ui_language(config))],
+            "stale": bool(previous_items),
+            "last_ok": int(old_prayer.get("last_ok", 0) or 0),
+            "for_date": str(old_prayer.get("for_date", "") or ""),
+            "timezone": old_timezone,
+            "outdated": bool(previous_items) and str(old_prayer.get("for_date", "")) != current_date,
         }
 
 
@@ -1247,6 +2461,111 @@ def normalize_provider_mode(value) -> str:
     mode = str(value or "auto").strip().lower()
     return mode if mode in ("auto", "yahoo", "twelve", "finnhub") else "auto"
 
+def cached_exchange_for(old_exchange: dict, currencies: list[str], english: bool = False) -> dict:
+    """Return only cached currency pairs still present in the current config."""
+    old_exchange = old_exchange if isinstance(old_exchange, dict) else {}
+    wanted = set()
+    for code in currencies:
+        wanted.add(("EUR", code))
+        wanted.add((code, "EUR"))
+    items = []
+    for item in old_exchange.get("items", []) if isinstance(old_exchange.get("items", []), list) else []:
+        if not isinstance(item, dict):
+            continue
+        pair = (str(item.get("base", "")).upper(), str(item.get("target", "")).upper())
+        if pair in wanted:
+            cached = dict(item)
+            cached["stale"] = True
+            items.append(cached)
+    return {
+        "date": old_exchange.get("date", ""),
+        "previous_date": old_exchange.get("previous_date", ""),
+        "items": items,
+        "source": "Frankfurter / ECB" if english else "Frankfurter / EZB",
+    }
+
+
+def cached_instruments_for(old_data: dict, entries: list[dict[str, str]], kind: str) -> dict:
+    """Filter stale market data to exact currently configured instrument identities."""
+    old_data = old_data if isinstance(old_data, dict) else {}
+    old_items = old_data.get("items", []) if isinstance(old_data.get("items", []), list) else []
+    by_symbol = {}
+    for item in old_items:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("symbol", "") or "").strip()
+        symbol = canonical_index_symbol(raw) if kind == "index" else raw.upper()
+        if symbol and symbol not in by_symbol:
+            by_symbol[symbol] = item
+
+    items = []
+    for entry in entries:
+        raw = str(entry.get("symbol", "") or "").strip()
+        symbol = canonical_index_symbol(raw) if kind == "index" else raw.upper()
+        previous = by_symbol.get(symbol)
+        if not previous:
+            continue
+        cached = dict(previous)
+        # Keep the user's current labels/display identifiers even when the quote
+        # itself came from cache. A renamed instrument must not resurrect its old
+        # presentation merely because the network is down.
+        cached["name"] = entry.get("name") or cached.get("name") or symbol
+        cached["display_name"] = cached["name"]
+        cached["symbol"] = symbol
+        if kind == "stock":
+            cached["display"] = entry.get("display", "")
+        cached["stale"] = True
+        items.append(cached)
+    return {"items": items, "source": old_data.get("source", "Yahoo Finance")}
+
+def merge_cached_exchange(current: dict, cached: dict) -> int:
+    """Append cached configured FX pairs that are absent from the fresh response."""
+    current_items = current.setdefault("items", []) if isinstance(current, dict) else []
+    if not isinstance(current_items, list):
+        current_items = []
+        current["items"] = current_items
+    seen = {
+        (str(item.get("base", "")).upper(), str(item.get("target", "")).upper())
+        for item in current_items if isinstance(item, dict)
+    }
+    added = 0
+    for item in cached.get("items", []) if isinstance(cached, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        key = (str(item.get("base", "")).upper(), str(item.get("target", "")).upper())
+        if key in seen:
+            continue
+        current_items.append(dict(item))
+        seen.add(key)
+        added += 1
+    return added
+
+
+def merge_cached_instruments(current: dict, cached: dict, kind: str) -> int:
+    """Append cached configured symbols that are absent from fresh market data."""
+    current_items = current.setdefault("items", []) if isinstance(current, dict) else []
+    if not isinstance(current_items, list):
+        current_items = []
+        current["items"] = current_items
+
+    def key_for(item: dict) -> str:
+        raw = str(item.get("symbol", "") or "").strip()
+        return canonical_index_symbol(raw) if kind == "index" else raw.upper()
+
+    seen = {key_for(item) for item in current_items if isinstance(item, dict) and key_for(item)}
+    added = 0
+    for item in cached.get("items", []) if isinstance(cached, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        key = key_for(item)
+        if not key or key in seen:
+            continue
+        current_items.append(dict(item))
+        seen.add(key)
+        added += 1
+    return added
+
+
 def fetch_exchange_rates(currencies: list[str]) -> dict:
     symbols = ",".join(urllib.parse.quote(c) for c in currencies)
     url = f"https://api.frankfurter.dev/v1/latest?base=EUR&symbols={symbols}"
@@ -1323,10 +2642,6 @@ def fetch_exchange_rates(currencies: list[str]) -> dict:
         })
 
     return {"date": date, "previous_date": previous_date, "items": pairs, "source": "Frankfurter / EZB"}
-
-def format_timestamp(ts, tz_name: str | None = None) -> tuple[str, str]:
-    date_value, time_value, _tz_abbr = format_market_timestamp(ts, tz_name)
-    return date_value, time_value
 
 def timezone_abbreviation(tz_name: str | None, ts: int | None = None) -> str:
     if not ZoneInfo or not tz_name:
@@ -1875,8 +3190,14 @@ def fetch_stocks(stocks: list[dict[str, str]], twelve_data_api_key: str = "", fi
     return fetch_instruments(stocks, twelve_data_api_key, finnhub_api_key, provider_mode, "stock")
 
 def fetch_markets(old: dict, config: dict) -> dict:
-    old_markets = old.get("markets", {})
+    old_markets = old.get("markets", {}) if isinstance(old.get("markets", {}), dict) else {}
     market_config = config.get("markets", {}) if isinstance(config.get("markets", {}), dict) else {}
+    english = is_english(config)
+    exchange_label = "Exchange rates" if english else "Wechselkurse"
+    indices_label = "Indices" if english else "Indizes"
+    stocks_label = "Stocks" if english else "Aktien"
+    stale_text = "cached data used" if english else "alte Cache-Daten verwendet"
+    frankfurter_source = "Frankfurter / ECB" if english else "Frankfurter / EZB"
 
     show_currencies = config_bool(market_config.get("show_currencies"), True)
     show_indices = config_bool(market_config.get("show_indices"), True)
@@ -1894,27 +3215,35 @@ def fetch_markets(old: dict, config: dict) -> dict:
     if show_currencies and currencies:
         try:
             exchange = fetch_exchange_rates(currencies)
+            exchange["source"] = frankfurter_source
+            cached_exchange = cached_exchange_for(old_markets.get("exchange", {}), currencies, english)
+            if merge_cached_exchange(exchange, cached_exchange):
+                errors.append(f"{exchange_label}: {stale_text}")
         except Exception as exc:
-            exchange = old_markets.get("exchange", {"items": [], "source": "Frankfurter / EZB"})
-            if not exchange.get("items"):
-                exchange = {"items": [], "source": "Frankfurter / EZB"}
-            errors.append(f"Wechselkurse: {type(exc).__name__}: {str(exc)[:140]}")
+            exchange = cached_exchange_for(old_markets.get("exchange", {}), currencies, english)
+            errors.append(f"{exchange_label}: {type(exc).__name__}: {str(exc)[:140]}")
+            if exchange.get("items"):
+                errors.append(f"{exchange_label}: {stale_text}")
     else:
-        exchange = {"items": [], "source": "Frankfurter / EZB", "date": "", "previous_date": ""}
+        exchange = {"items": [], "source": frankfurter_source, "date": "", "previous_date": ""}
 
     if show_indices and indices:
         try:
             index_data = fetch_indices(indices, twelve_data_api_key, finnhub_api_key, provider_mode)
             if index_data.get("errors"):
-                errors.extend([f"Indizes: {err}" for err in index_data.get("errors", [])])
-            if not index_data.get("items") and old_markets.get("indices", {}).get("items"):
-                index_data = old_markets.get("indices", {"items": [], "source": "Yahoo Finance"})
-                errors.append("Indizes: alte Cache-Daten verwendet")
-        except Exception as exc:
-            index_data = old_markets.get("indices", {"items": [], "source": "Yahoo Finance"})
+                errors.extend([f"{indices_label}: {err}" for err in index_data.get("errors", [])])
+            cached = cached_instruments_for(old_markets.get("indices", {}), indices, "index")
             if not index_data.get("items"):
-                index_data = {"items": [], "source": "Yahoo Finance"}
-            errors.append(f"Indizes: {type(exc).__name__}: {str(exc)[:140]}")
+                if cached.get("items"):
+                    index_data = cached
+                    errors.append(f"{indices_label}: {stale_text}")
+            elif merge_cached_instruments(index_data, cached, "index"):
+                errors.append(f"{indices_label}: {stale_text}")
+        except Exception as exc:
+            index_data = cached_instruments_for(old_markets.get("indices", {}), indices, "index")
+            errors.append(f"{indices_label}: {type(exc).__name__}: {str(exc)[:140]}")
+            if index_data.get("items"):
+                errors.append(f"{indices_label}: {stale_text}")
     else:
         index_data = {"items": [], "source": "Yahoo Finance"}
 
@@ -1922,15 +3251,19 @@ def fetch_markets(old: dict, config: dict) -> dict:
         try:
             stock_data = fetch_stocks(stocks, twelve_data_api_key, finnhub_api_key, provider_mode)
             if stock_data.get("errors"):
-                errors.extend([f"Aktien: {err}" for err in stock_data.get("errors", [])])
-            if not stock_data.get("items") and old_markets.get("stocks", {}).get("items"):
-                stock_data = old_markets.get("stocks", {"items": [], "source": "Yahoo Finance"})
-                errors.append("Aktien: alte Cache-Daten verwendet")
-        except Exception as exc:
-            stock_data = old_markets.get("stocks", {"items": [], "source": "Yahoo Finance"})
+                errors.extend([f"{stocks_label}: {err}" for err in stock_data.get("errors", [])])
+            cached = cached_instruments_for(old_markets.get("stocks", {}), stocks, "stock")
             if not stock_data.get("items"):
-                stock_data = {"items": [], "source": "Yahoo Finance"}
-            errors.append(f"Aktien: {type(exc).__name__}: {str(exc)[:140]}")
+                if cached.get("items"):
+                    stock_data = cached
+                    errors.append(f"{stocks_label}: {stale_text}")
+            elif merge_cached_instruments(stock_data, cached, "stock"):
+                errors.append(f"{stocks_label}: {stale_text}")
+        except Exception as exc:
+            stock_data = cached_instruments_for(old_markets.get("stocks", {}), stocks, "stock")
+            errors.append(f"{stocks_label}: {type(exc).__name__}: {str(exc)[:140]}")
+            if stock_data.get("items"):
+                errors.append(f"{stocks_label}: {stale_text}")
     else:
         stock_data = {"items": [], "source": "Yahoo Finance"}
 
@@ -2298,13 +3631,6 @@ def _strip_ansi(text: str) -> str:
 def _nonempty_lines(text: str) -> list[str]:
     return [line.strip() for line in _strip_ansi(text).splitlines() if line.strip()]
 
-
-def _count_command_lines(proc: subprocess.CompletedProcess | None) -> int | None:
-    if proc is None:
-        return None
-    return len(_nonempty_lines(proc.stdout or ""))
-
-
 def _count_pkcon_updates() -> tuple[int, str] | None:
     """Use PackageKit as a cross-distro fallback.
 
@@ -2522,13 +3848,6 @@ def updates_available() -> tuple[str, str]:
         return "0", "+".join(source for _, source in counters[:2])
     return "--", ""
 
-
-def first_ipv4(value: str) -> str:
-    match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", value or "")
-    return match.group(0) if match else ""
-
-
-
 def _shorten_items(values: list[str], limit: int = 3) -> str:
     cleaned: list[str] = []
     for value in values:
@@ -2644,6 +3963,35 @@ def provider_vpn_status() -> list[str]:
     return names
 
 
+_VPN_NAME_CACHE: list[str] | None = None
+
+
+def detected_vpn_names() -> list[str]:
+    """Names of VPN tunnels that currently look active.
+
+    Cached for the lifetime of the process: a single cache run asks at most
+    once, and the answer cannot meaningfully change mid-refresh.
+    """
+    global _VPN_NAME_CACHE
+    if _VPN_NAME_CACHE is not None:
+        return _VPN_NAME_CACHE
+
+    names: list[str] = []
+    try:
+        for value in provider_vpn_status() + nmcli_vpn_connections():
+            if value and value not in names:
+                names.append(value)
+        if not names:
+            for iface in default_route_interfaces():
+                if _vpn_like_interface(iface) and iface not in names:
+                    names.append(iface)
+    except Exception:
+        names = []
+
+    _VPN_NAME_CACHE = names
+    return names
+
+
 def vpn_status_item(manual_label: str, english: bool = False) -> dict[str, str]:
     manual = re.sub(r"\s+", " ", str(manual_label or "").strip())[:40]
 
@@ -2735,7 +4083,13 @@ def public_network_info() -> list[dict[str, str]]:
             headers={"User-Agent": UA, "Accept": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            # ipinfo normally returns only a few hundred bytes. Keep the same
+            # defensive bounded-read rule used by the other HTTP helpers so an
+            # unexpected upstream response cannot consume unbounded memory.
+            raw = resp.read(200_001)
+            if len(raw) > 200_000:
+                return []
+            data = json.loads(raw.decode("utf-8", errors="replace"))
         if not isinstance(data, dict):
             return []
         out: list[dict[str, str]] = []
@@ -2848,11 +4202,26 @@ def load_old() -> dict:
     except Exception:
         return {"feeds": []}
 
-def old_items(old: dict, feed_name: str) -> list[dict[str, str]]:
+def old_items(old: dict, feed_name: str, feed_url: str = "") -> list[dict[str, str]]:
+    """Previously cached headlines for one feed.
+
+    Matching on the display name alone was wrong: two feeds may share a name,
+    and editing an existing feed's URL would make the old source's headlines
+    reappear under the new one. An exact (name, url) match wins; a name-only
+    match is accepted solely when no URL was recorded, which is the case for
+    caches written before v2.1.1.
+    """
+    url = str(feed_url or "").strip()
+    fallback: list | None = None
     for feed in old.get("feeds", []):
-        if feed.get("name") == feed_name:
+        if not isinstance(feed, dict) or feed.get("name") != feed_name:
+            continue
+        stored_url = str(feed.get("url", "") or "").strip()
+        if url and stored_url == url:
             return feed.get("items", [])
-    return []
+        if not stored_url and fallback is None:
+            fallback = feed.get("items", [])
+    return fallback if fallback is not None else []
 
 def block_enabled(config: dict, key: str) -> bool:
     blocks = config.get("blocks", {})
@@ -2893,33 +4262,14 @@ def build_cache(config: dict | None = None) -> dict:
     feeds = old.get("feeds", []) if isinstance(old.get("feeds", []), list) else []
     errors = old.get("errors", []) if isinstance(old.get("errors", []), list) else []
 
+    news_status = old.get("news_status", {}) if isinstance(old.get("news_status", {}), dict) else {}
+
     if block_enabled(config, "news") and refresh_news:
-        feeds = []
-        errors = []
-        for feed in config.get("feeds", []):
-            name = feed.get("name", "Feed")
-            url = feed.get("url", "")
-            try:
-                limit = int(feed.get("limit", 5) or 5)
-            except Exception:
-                limit = 5
-
-            try:
-                items = fetch_feed(url, limit)
-                if not items:
-                    raise RuntimeError("no items found")
-            except Exception as exc:
-                items = old_items(old, name)
-                errors.append(f"{name}: {type(exc).__name__}")
-
-            feeds.append({
-                "name": name,
-                "url": url,
-                "items": items,
-            })
+        feeds, errors, news_status = fetch_all_feeds(config, old, ui_language(config))
     elif not block_enabled(config, "news"):
         feeds = []
         errors = []
+        news_status = {}
 
     data = {
         "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -2931,6 +4281,7 @@ def build_cache(config: dict | None = None) -> dict:
         "system": fetch_system_info(old, config) if block_enabled(config, "system") and refresh_system_block else (existing_block(old, "system", "System") if block_enabled(config, "system") else empty_block("System")),
         "feeds": feeds,
         "errors": errors,
+        "news_status": news_status,
         "blocks": {
             "weather": block_enabled(config, "weather"),
             "prayer": block_enabled(config, "prayer"),
@@ -2942,7 +4293,7 @@ def build_cache(config: dict | None = None) -> dict:
         "_refresh": {
             "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
             "system": now_ts if refresh_system_block else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
-            "version": "2.0.19",
+            "version": "2.1.7",
             "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
             "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },
@@ -2951,6 +4302,7 @@ def build_cache(config: dict | None = None) -> dict:
     tmp = CACHE.with_name(f"{CACHE.name}.tmp.{os.getpid()}.{time.time_ns()}")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _restrict(tmp, 0o600)
         tmp.replace(CACHE)
     except BaseException:
         try:
@@ -2968,6 +4320,7 @@ def acquire_cache_lock():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = OUT_DIR / ".refresh.lock"
     handle = lock_path.open("w", encoding="utf-8")
+    _restrict(lock_path, 0o600)
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -2980,7 +4333,8 @@ def acquire_cache_lock():
 if __name__ == "__main__":
     lock_handle = acquire_cache_lock()
     if lock_handle is None:
-        raise SystemExit(0)
+        # Another cache process (usually the systemd timer) is mid-refresh.
+        raise SystemExit(EXIT_LOCK_BUSY)
     try:
         ensure_config()
         config = load_config()

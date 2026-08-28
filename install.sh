@@ -13,7 +13,14 @@
 set -euo pipefail
 
 BASE_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-VERSION="$(python3 -c "import json,sys; print(json.load(open('$BASE_DIR/files/plasmoid/metadata.json'))['KPlugin']['Version'])")"
+VERSION="$(python3 - "$BASE_DIR/files/plasmoid/metadata.json" <<'PYVERSION'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+data = json.loads(p.read_text(encoding="utf-8"))
+print(data["KPlugin"]["Version"])
+PYVERSION
+)"
 TS="$(date +%Y%m%d-%H%M%S)"
 
 echo "== Die Lage / Daily Briefing v${VERSION} =="
@@ -101,6 +108,47 @@ CONFIG_DIR="$HOME/.config/die-lage"
 CACHE_DIR="$HOME/.cache/die-lage"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CACHE_DIR"
+# config.json may hold Twelve Data / Finnhub API keys. Default umask leaves it
+# world-readable, which is needless exposure on a shared machine.
+chmod 0700 "$CONFIG_DIR" "$CACHE_DIR" 2>/dev/null || true
+
+# ---- Preflight: validate release input and existing user config --------------
+# Do this before replacing a single installed helper/widget file. A malformed
+# existing config may contain valuable hand-edited feeds or API keys; silently
+# replacing it with defaults would be data loss.
+python3 - "$BASE_DIR/files/plasmoid" "$BASE_DIR/files/config/default-config.json" "$CONFIG_DIR/config.json" <<'PYPREFLIGHT'
+from pathlib import Path
+import json, sys
+
+plasmoid = Path(sys.argv[1])
+defaults_path = Path(sys.argv[2])
+config_path = Path(sys.argv[3])
+
+def load_object(path: Path, label: str):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"FEHLER: {label} ist kein gültiges JSON: {path}: {exc}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"FEHLER: {label} muss ein JSON-Objekt sein: {path}")
+    return data
+
+metadata = load_object(plasmoid / "metadata.json", "metadata.json")
+if metadata.get("KPackageStructure") != "Plasma/Applet":
+    raise SystemExit("FEHLER: Release-Metadaten haben nicht KPackageStructure=Plasma/Applet")
+if metadata.get("X-Plasma-API-Minimum-Version") != "6.0":
+    raise SystemExit("FEHLER: Release-Metadaten haben nicht X-Plasma-API-Minimum-Version=6.0")
+for required in (
+    plasmoid / "contents/ui/main.qml",
+    plasmoid / "contents/images/dielage.svg",
+    plasmoid / "contents/images/dielage-panel.svg",
+):
+    if not required.is_file():
+        raise SystemExit(f"FEHLER: Release-Datei fehlt: {required}")
+load_object(defaults_path, "default-config.json")
+if config_path.exists():
+    load_object(config_path, "bestehende config.json")
+PYPREFLIGHT
 
 # ---- Optional system tools check --------------------------------------------
 echo "== Optionale Systeminfo-Werkzeuge prüfen =="
@@ -198,39 +246,66 @@ echo
 # plasmoid folder. Plasma scans every directory there, so those backup copies
 # can be loaded as broken duplicate applets. Move current-package copies out
 # of Plasma's search path before installing the clean package.
+# Only create the quarantine directory when there is actually something to
+# move. Creating it unconditionally left one empty timestamped directory in
+# $HOME after every single install or upgrade.
 QUARANTINE="$HOME/plasma-dielage-quarantine-$TS"
-mkdir -p "$QUARANTINE"
 shopt -s nullglob
 moved_any=0
 for d in "$HOME"/.local/share/plasma/plasmoids/com.drissner.dielage*; do
+    # Skip the canonical directory. It is replaced by the atomic swap further
+    # down, which validates the new package first and rolls back on failure.
+    # Moving it here defeated that: a failed install left the user with no
+    # widget at all, with the old one stranded in the quarantine folder.
+    [ "$d" = "$HOME/.local/share/plasma/plasmoids/com.drissner.dielage" ] && continue
     if [ -e "$d" ]; then
+        [ "$moved_any" -eq 1 ] || mkdir -p "$QUARANTINE"
         mv "$d" "$QUARANTINE"/ 2>/dev/null || true
         moved_any=1
     fi
 done
 shopt -u nullglob
+# Belt and braces: if the moves all failed, do not leave an empty shell behind.
+[ -d "$QUARANTINE" ] && rmdir "$QUARANTINE" 2>/dev/null && moved_any=0
 
 # Clear only Die-Lage-specific package/QML cache entries.  The old emergency
 # cleaner still performs a full Plasma cache reset, but the normal installer
 # should not wipe unrelated Plasma caches just to update one applet.
 find "$HOME/.cache" -maxdepth 4 \( -iname '*dielage*' -o -iname '*die-lage*' -o -iname '*com.drissner.dielage*' \) -exec rm -rf {} + 2>/dev/null || true
 
-# ---- Install backend scripts -------------------------------------------------
-install -m 0755 "$BASE_DIR/files/bin/dielage-cache.py"        "$HOME/.local/bin/dielage-cache.py"
-install -m 0755 "$BASE_DIR/files/bin/dielage-server.py"       "$HOME/.local/bin/dielage-server.py"
-install -m 0755 "$BASE_DIR/uninstall.sh"                      "$HOME/.local/bin/dielage-uninstall"
-
 # ---- Install plasmoid package -----------------------------------------------
-PLASMOID_DIR="$HOME/.local/share/plasma/plasmoids/com.drissner.dielage"
-rm -rf "$PLASMOID_DIR"
-mkdir -p "$PLASMOID_DIR"
-cp -a "$BASE_DIR/files/plasmoid/." "$PLASMOID_DIR/"
+# Build and validate the new package in a staging directory next to the final
+# location, then switch it in with a rename. Previously the old directory was
+# removed first and the new files were copied straight to the live path, with
+# validation happening afterwards: a failure at either step left no working
+# widget at all, despite the header of this script promising an atomic swap.
+PLASMOID_ROOT="$HOME/.local/share/plasma/plasmoids"
+PLASMOID_DIR="$PLASMOID_ROOT/com.drissner.dielage"
+STAGING_DIR="$PLASMOID_ROOT/.com.drissner.dielage.new.$$"
+BACKUP_DIR="$PLASMOID_ROOT/.com.drissner.dielage.old.$$"
+mkdir -p "$PLASMOID_ROOT"
+rm -rf "$STAGING_DIR"
 
-# Validate installed metadata before Plasma sees it.
-python3 - <<'PY'
+cleanup_staging() {
+    # On any failure: put the previous package back if we already moved it,
+    # then drop the staging copy. The user keeps a working widget either way.
+    if [ -d "$BACKUP_DIR" ]; then
+        rm -rf "$PLASMOID_DIR"
+        mv "$BACKUP_DIR" "$PLASMOID_DIR" 2>/dev/null || true
+        echo "Installation fehlgeschlagen – vorherige Widget-Version wiederhergestellt." >&2
+    fi
+    rm -rf "$STAGING_DIR"
+}
+trap cleanup_staging EXIT
+
+mkdir -p "$STAGING_DIR"
+cp -a "$BASE_DIR/files/plasmoid/." "$STAGING_DIR/"
+
+# Validate the staged package BEFORE it is anywhere Plasma will look.
+python3 - "$STAGING_DIR" <<'PY'
 from pathlib import Path
 import json, sys
-p = Path.home() / ".local/share/plasma/plasmoids/com.drissner.dielage/metadata.json"
+p = Path(sys.argv[1]) / "metadata.json"
 data = json.loads(p.read_text(encoding="utf-8"))
 if data.get("KPackageStructure") != "Plasma/Applet":
     raise SystemExit("metadata.json is missing KPackageStructure=Plasma/Applet")
@@ -244,15 +319,34 @@ required = [
 ]
 missing = [str(x) for x in required if not x.exists()]
 if missing:
-    raise SystemExit("missing installed plasmoid files: " + ", ".join(missing))
+    raise SystemExit("missing staged plasmoid files: " + ", ".join(missing))
 print("Plasmoid package OK:", p)
 PY
+
+# ---- Install backend scripts -------------------------------------------------
+# Do this only after the release package has passed staged validation. An older
+# installer updated the helpers first; a malformed plasmoid could therefore
+# leave a new backend paired with the old widget even though installation had
+# failed. Validation is now the mutation boundary.
+install -m 0755 "$BASE_DIR/files/bin/dielage-cache.py"        "$HOME/.local/bin/dielage-cache.py"
+install -m 0755 "$BASE_DIR/files/bin/dielage-server.py"       "$HOME/.local/bin/dielage-server.py"
+install -m 0755 "$BASE_DIR/uninstall.sh"                      "$HOME/.local/bin/dielage-uninstall"
+
+# Swap in. Two renames on the same filesystem; the window in which no package
+# exists is a single rename rather than a full recursive copy.
+if [ -e "$PLASMOID_DIR" ]; then
+    mv "$PLASMOID_DIR" "$BACKUP_DIR"
+fi
+mv "$STAGING_DIR" "$PLASMOID_DIR"
+rm -rf "$BACKUP_DIR"
+trap - EXIT
 
 # ---- Install / merge config -------------------------------------------------
 cp "$BASE_DIR/files/config/default-config.json" "$HOME/.config/die-lage/default-config.json"
 
 if [ ! -f "$HOME/.config/die-lage/config.json" ]; then
     cp "$BASE_DIR/files/config/default-config.json" "$HOME/.config/die-lage/config.json"
+    chmod 0600 "$HOME/.config/die-lage/config.json" 2>/dev/null || true
     echo "Frische Konfiguration installiert."
 else
     echo "Bestehende Konfiguration wird beibehalten und um neue Felder ergänzt."
@@ -262,149 +356,94 @@ import json
 import os
 import time
 
+# The installed default-config.json is the single source of truth for defaults.
+# Earlier versions repeated the whole default dict inline here, which drifted:
+# this copy was missing system_interval_minutes, prayer_upcoming_before_minutes
+# and prayer_now_after_minutes. Reading the shipped file removes that class of
+# bug entirely.
 path = Path.home() / ".config/die-lage/config.json"
-default_prayer = {"city": "Berlin", "country": "Germany", "method": 3}
-default_ui = {
-    "font_size": 16, "highlight_color": "", "desktop_background_mode": "default",
-    "desktop_background_color": "", "news_font_family": "", "news_font_size": 16,
-    "news_font_size_offset": 0, "language": "de", "panel_mode": "icon",
-    "panel_icon_mode": "dielage", "panel_theme_icon": "view-list-details",
-    "panel_warning_badge": True, "panel_no_warnings_mode": "icon",
-    "panel_width": 24, "panel_popup_width": 600, "panel_middle_click_refresh": True,
-    "block_heading_icons": True, "prayer_upcoming_highlight": True,
-    "custom_title": "", "separator_style": "subtle", "news_links_clickable": True,
-    "title_style": "accent",
-}
-default_blocks = {"weather": True, "prayer": True, "nina": True, "markets": True, "system": True, "news": True}
-default_system = {"show_info": True, "show_network": True, "show_public_network": False, "show_vpn": True, "vpn_label": "", "show_updates": True}
-default_markets = {
-    "currencies": ["USD", "GBP", "CHF"],
-    "indices": [{"name": "Dow Jones", "symbol": "^DJI"}, {"name": "DAX", "symbol": "^GDAXI"}, {"name": "Nikkei 225", "symbol": "^N225"}],
-    "stocks": [], "show_currencies": True, "show_indices": True, "show_stocks": True,
-    "twelve_data_api_key": "", "finnhub_api_key": "", "provider_mode": "auto",
-}
-default_block_order = ["nina", "weather", "prayer", "system", "markets", "news"]
-default_collapsed_blocks = {key: False for key in default_block_order}
-old_default_block_order = ["weather", "prayer", "nina", "system", "markets", "news"]
-default_feeds = [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
- {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
- {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
- {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
- {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
- {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
- {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
- {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
- {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
- {'limit': 3, 'name': 'Polizei Berlin', 'url': 'https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml'},
- {'limit': 3, 'name': 'Heise online', 'url': 'https://www.heise.de/newsticker/heise.rdf'}]
-previous_default_feeds = [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
- {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
- {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
- {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
- {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
- {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
- {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
- {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
- {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
- {'limit': 3, 'name': 'BILD Berlin', 'url': 'https://www.bild.de/feed/regional-berlin.xml'}]
-index_aliases = {"^DAX": "^GDAXI", "DAX": "^GDAXI", "^NKX": "^N225", "NKX": "^N225"}
-valid_block_ids = set(default_block_order)
+defaults_path = Path.home() / ".config/die-lage/default-config.json"
 
-try:
-    data = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    data = {}
-
+defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
+if not isinstance(defaults, dict):
+    raise SystemExit("default-config.json is not a JSON object")
+data = json.loads(path.read_text(encoding="utf-8"))
 if not isinstance(data, dict):
-    data = {}
+    raise SystemExit("config.json is not a JSON object")
 
-data.setdefault("prayer", default_prayer)
+
+def fill_missing(target: dict, source: dict) -> None:
+    """Add keys the user does not have yet; never overwrite their choices.
+
+    Lists (feeds, locations, indices) are user content and are left alone once
+    they exist, so a personal feed list survives every upgrade untouched.
+    """
+    for key, value in source.items():
+        if key not in target:
+            target[key] = json.loads(json.dumps(value))
+        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            fill_missing(target[key], value)
+
+
+fill_missing(data, defaults)
+
 ui = data.setdefault("ui", {})
 if not isinstance(ui, dict):
-    ui = dict(default_ui)
+    ui = {}
     data["ui"] = ui
-for key, value in default_ui.items():
-    if key == "news_font_size" and key not in ui:
-        try:
-            ui[key] = int(ui.get("font_size", 16)) + int(ui.get("news_font_size_offset", 0))
-        except Exception:
-            ui[key] = value
-    else:
-        ui.setdefault(key, value)
 
-# v1.60.6: 1000 px was too wide as a default panel popup. If the stored
-# value is exactly the old bundled default, migrate it to the new default.
-# Custom values other than 1000 are preserved.
+# --- Targeted migrations from older releases -------------------------------
+# v1.60.6: 1000 px was too wide as a default panel popup. Migrate only the
+# exact old bundled default; custom widths are preserved.
 try:
     if int(ui.get("panel_popup_width", 600)) == 1000:
         ui["panel_popup_width"] = 600
 except Exception:
     ui["panel_popup_width"] = 600
 
-blocks = data.setdefault("blocks", {})
-if not isinstance(blocks, dict):
-    blocks = dict(default_blocks)
-    data["blocks"] = blocks
-for key, value in default_blocks.items():
-    blocks.setdefault(key, value)
+index_aliases = {"^DAX": "^GDAXI", "DAX": "^GDAXI", "^NKX": "^N225", "NKX": "^N225"}
+markets = data.get("markets")
+if isinstance(markets, dict):
+    if isinstance(markets.get("stocks"), list):
+        for item in markets["stocks"]:
+            if isinstance(item, dict) and str(item.get("symbol", "")).upper() == "NET" and not item.get("display"):
+                item["display"] = "A2PQMN"
+    if isinstance(markets.get("indices"), list):
+        for item in markets["indices"]:
+            if isinstance(item, dict):
+                raw_symbol = str(item.get("symbol", "")).strip()
+                item["symbol"] = index_aliases.get(raw_symbol.upper(), raw_symbol)
 
-system = data.setdefault("system", {})
-if not isinstance(system, dict):
-    system = dict(default_system)
-    data["system"] = system
-for key, value in default_system.items():
-    system.setdefault(key, value)
+# Feed lists that still match an older bundled default get upgraded to the
+# current default; anything the user touched is left exactly as it is.
+previous_default_feeds = [
+    {'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
+    {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
+    {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
+    {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
+    {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
+    {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
+    {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
+    {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
+    {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
+    {'limit': 3, 'name': 'BILD Berlin', 'url': 'https://www.bild.de/feed/regional-berlin.xml'},
+]
+if data.get("feeds") == previous_default_feeds and isinstance(defaults.get("feeds"), list):
+    data["feeds"] = json.loads(json.dumps(defaults["feeds"]))
 
-markets = data.setdefault("markets", {})
-if not isinstance(markets, dict):
-    markets = dict(default_markets)
-    data["markets"] = markets
-markets.setdefault("currencies", default_markets["currencies"])
-markets.setdefault("indices", default_markets["indices"])
-markets.setdefault("show_currencies", default_markets["show_currencies"])
-markets.setdefault("show_indices", default_markets["show_indices"])
-markets.setdefault("show_stocks", default_markets["show_stocks"])
-markets.setdefault("twelve_data_api_key", default_markets["twelve_data_api_key"])
-markets.setdefault("finnhub_api_key", default_markets["finnhub_api_key"])
-markets.setdefault("provider_mode", default_markets["provider_mode"])
-markets.setdefault("stocks", default_markets["stocks"])
-
-if isinstance(markets.get("stocks"), list):
-    for item in markets["stocks"]:
-        if isinstance(item, dict) and str(item.get("symbol", "")).upper() == "NET" and not item.get("display"):
-            item["display"] = "A2PQMN"
-if isinstance(markets.get("indices"), list):
-    for item in markets["indices"]:
-        if isinstance(item, dict):
-            raw_symbol = str(item.get("symbol", "")).strip()
-            item["symbol"] = index_aliases.get(raw_symbol.upper(), raw_symbol)
-
-
-# Keep custom feeds untouched. If feeds are missing, use the current defaults.
-# If the stored list is exactly the previous bundled default, upgrade it to
-# the new default list so local test installs get the refreshed sources.
-feeds = data.get("feeds")
-if not isinstance(feeds, list):
-    data["feeds"] = default_feeds
-elif feeds == previous_default_feeds:
-    data["feeds"] = default_feeds
-
-data.setdefault("fetch_interval_minutes", 10)
-data.setdefault("local_server_port", 8765)
-data.setdefault("boot_refresh_enabled", True)
-data.setdefault("boot_refresh_delay_seconds", 120)
-default_nina_codes = [{"source": "nina", "name": "Berlin", "code": "110000000000"}]
 old_default_nina_codes = [
     {"source": "nina", "name": "Berlin", "code": "110000000000"},
     {"source": "nina", "name": "Hennigsdorf", "code": "120650136136"},
     {"source": "nina", "name": "Oberhavel", "code": "120650000000"},
 ]
-if not isinstance(data.get("nina_codes"), list):
-    data["nina_codes"] = list(default_nina_codes)
-elif data.get("nina_codes") == old_default_nina_codes:
-    data["nina_codes"] = list(default_nina_codes)
+if data.get("nina_codes") == old_default_nina_codes and isinstance(defaults.get("nina_codes"), list):
+    data["nina_codes"] = json.loads(json.dumps(defaults["nina_codes"]))
 
-# Repair block_order: keep known ids in stored order, append missing ones.
+# --- Repair block order and collapse state ---------------------------------
+default_block_order = defaults.get("block_order") or ["nina", "weather", "prayer", "system", "markets", "news"]
+old_default_block_order = ["weather", "prayer", "nina", "system", "markets", "news"]
+valid_block_ids = set(default_block_order)
+
 raw_order = data.get("block_order")
 if raw_order == old_default_block_order:
     raw_order = list(default_block_order)
@@ -422,7 +461,7 @@ for fallback in default_block_order:
         seen.add(fallback)
 data["block_order"] = cleaned
 
-collapsed = data.setdefault("collapsed_blocks", default_collapsed_blocks)
+collapsed = data.get("collapsed_blocks")
 if not isinstance(collapsed, dict):
     collapsed = {}
 data["collapsed_blocks"] = {key: bool(collapsed.get(key, False)) for key in default_block_order}
@@ -432,6 +471,7 @@ data["collapsed_blocks"] = {key: bool(collapsed.get(key, False)) for key in defa
 tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
 try:
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.chmod(0o600)
     tmp.replace(path)
 except BaseException:
     try:
@@ -441,6 +481,7 @@ except BaseException:
     raise
 print("Konfiguration aktualisiert.")
 PY
+    chmod 0600 "$HOME/.config/die-lage/config.json" 2>/dev/null || true
 fi
 
 # ---- systemd user units -----------------------------------------------------
@@ -506,26 +547,62 @@ finally:
 PYINSTALLTIMER
 )
 
-systemctl --user daemon-reload
-systemctl --user enable --now dielage-cache.timer        >/dev/null 2>&1 || true
-# Default to "enabled" if the Python heredoc above produced no output (for
-# example because of a transient subshell error). The user's default in
-# default-config.json is also "enabled", so this preserves the documented
-# behaviour and avoids accidentally disabling the boot timer on upgrades.
-if [ "$boot_refresh_enabled" != "0" ]; then
-    systemctl --user enable --now dielage-cache-boot.timer   >/dev/null 2>&1 || true
+# Every systemctl call below is best-effort. Without a systemd user bus - in a
+# container, a chroot, or an SSH session with no user session - daemon-reload
+# exits non-zero, and under `set -e` that aborted the whole installer after the
+# files were already in place, leaving a half-configured install with no
+# explanation. The files matter; wiring up units is a separate concern.
+SYSTEMD_OK=1
+# DIELAGE_SKIP_SYSTEMD=1 is a release-test hook. Without it, running the
+# installer sandbox from an active Plasma session would still talk to the real
+# per-user systemd manager and could restart the user's installed Die Lage
+# service despite HOME pointing at a temporary directory. Normal installs never
+# set this variable.
+if [ "${DIELAGE_SKIP_SYSTEMD:-0}" = "1" ]; then
+    SYSTEMD_OK=0
 else
-    systemctl --user disable --now dielage-cache-boot.timer  >/dev/null 2>&1 || true
+    if ! systemctl --user daemon-reload >/dev/null 2>&1; then
+        SYSTEMD_OK=0
+        echo "Hinweis: Kein systemd-User-Bus erreichbar. Dateien wurden installiert," >&2
+        echo "die Dienste müssen in einer regulären Desktop-Sitzung aktiviert werden:" >&2
+        echo "  systemctl --user daemon-reload" >&2
+        echo "  systemctl --user enable --now dielage-local-server.service dielage-cache.timer" >&2
+    fi
+    systemctl --user enable --now dielage-cache.timer        >/dev/null 2>&1 || true
+    # Default to "enabled" if the Python heredoc above produced no output (for
+    # example because of a transient subshell error). The user's default in
+    # default-config.json is also "enabled", so this preserves the documented
+    # behaviour and avoids accidentally disabling the boot timer on upgrades.
+    if [ "$boot_refresh_enabled" != "0" ]; then
+        systemctl --user enable --now dielage-cache-boot.timer   >/dev/null 2>&1 || true
+    else
+        systemctl --user disable --now dielage-cache-boot.timer  >/dev/null 2>&1 || true
+    fi
+    systemctl --user enable --now dielage-local-server.service >/dev/null 2>&1 || true
+    systemctl --user restart dielage-local-server.service    >/dev/null 2>&1 || true
 fi
-systemctl --user enable --now dielage-local-server.service >/dev/null 2>&1 || true
-systemctl --user restart dielage-local-server.service    >/dev/null 2>&1 || true
 
-# Force a first refresh so the cache is populated before the widget renders.
-"$HOME/.local/bin/dielage-cache.py" --force >/dev/null 2>&1 || true
+# Kick off the first cache refresh WITHOUT waiting for it. Running it inline
+# meant the installer blocked on every feed, weather and market request; on a
+# slow or filtered connection that turned a two-second install into minutes of
+# apparent hang. systemd owns the job, and the widget shows its own loading
+# state until the cache lands. DIELAGE_SKIP_FIRST_REFRESH=1 is an internal,
+# network-free release-test hook; normal installations never set it.
+if [ "${DIELAGE_SKIP_FIRST_REFRESH:-0}" != "1" ]; then
+    if [ "$SYSTEMD_OK" -eq 1 ] && command -v systemd-run >/dev/null 2>&1 \
+       && systemd-run --user --quiet --collect --unit="dielage-first-refresh-$$" \
+            "$HOME/.local/bin/dielage-cache.py" --force >/dev/null 2>&1; then
+        :
+    else
+        # No usable systemd: still populate the cache, but in the background so the
+        # installer does not sit waiting on every feed and market request.
+        ( "$HOME/.local/bin/dielage-cache.py" --force >/dev/null 2>&1 || true ) &
+    fi
+fi
 
 # Tell kbuildsycoca6 to rebuild its service cache so the picker sees the new
 # metadata. Optional: on Plasma 6 the new applet usually appears anyway.
-if command -v kbuildsycoca6 >/dev/null 2>&1; then
+if [ "${DIELAGE_SKIP_SYSTEMD:-0}" != "1" ] && command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 fi
 

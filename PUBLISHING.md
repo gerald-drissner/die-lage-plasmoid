@@ -1,24 +1,25 @@
 # Publishing Die Lage
 
-## Build
+## Release verification
 
-Run the release check for the current version, for example:
+Always run the release checks from the exact unpacked release ZIP, not only from a development folder:
 
 ```bash
-./release-checks-v2.0.19.sh
+./release-checks-v2.1.7.sh
 ```
+
+For a final release, also test the full ZIP on a real Plasma 6 desktop because the static QML checks cannot replace `plasmashell` runtime rendering.
 
 ## GitHub release assets
 
-Upload the generated files:
+Attach these three files to the `v2.1.7` release:
 
-- `die-lage-<version>.plasmoid`
-- `die-lage-v<version>.zip`
-- `die-lage-latest.zip`
-
-Release notes and KDE Store changelog snippets should be used in the release UI, but should not be committed to the source tree.
+- `die-lage-2.1.7.plasmoid` — Plasma widget package
+- `die-lage-v2.1.7.zip` — full installer including helper/systemd units
+- `die-lage-latest.zip` — byte-identical stable alias of the full installer
 
 ## KDE Store
 
-- Main package: `die-lage-<version>.plasmoid`
-- Full/helper installer ZIP: `die-lage-v<version>.zip`
+Update the existing Die Lage product; do not create a second product. Upload `die-lage-2.1.7.plasmoid` as the new Plasma package.
+
+Important: a KDE Store `.plasmoid` update cannot write `~/.local/bin` or install systemd user units. Users whose local helper is older therefore receive a version-mismatch notice in the widget and should run the current full installer ZIP once. The helper/config/cache remain user-level; no root access is required.

@@ -93,6 +93,54 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.1.7" date="2026-08-28">
+      <description>
+        <p>Refines the live UI: weather attribution moves out of the heading into a quiet footer with a compact source-info control, refresh controls keep a clearly visible spinner while work is running, and RSS publication ages gain an optional continuous color scale with configurable duration and colors that default to the Plasma theme.</p>
+        <p xml:lang="de">Verfeinert die Live-Oberfläche: Die Wetter-Quellenangabe wandert aus der Überschrift in einen dezenten Fußbereich mit kompakter Quelleninfo, Aktualisierungs-Schaltflächen zeigen während des Abrufs einen klar sichtbaren Spinner, und RSS-Zeitangaben erhalten eine optionale stufenlose Farbskala mit einstellbarer Dauer und Farben auf Basis des Plasma-Farbschemas.</p>
+      </description>
+    </release>
+    <release version="2.1.6" date="2026-08-28">
+      <description>
+        <p>Hardens refresh, cache and upgrade behaviour after the 2.1.5 live test: block refreshes are strictly local, unexpected worker failures no longer disappear silently, partial market failures retain only matching cached instruments, malformed user configuration is preserved instead of reset, and Store/helper version mismatches are reported.</p>
+        <p xml:lang="de">Härtet Aktualisierung, Cache und Upgrade nach dem Live-Test von 2.1.5: Block-Aktualisierungen bleiben strikt lokal, unerwartete Worker-Fehler verschwinden nicht mehr still, partielle Marktfehler behalten nur passende Cache-Werte, beschädigte Nutzerkonfiguration wird nicht zurückgesetzt und Store-/Helper-Versionsabweichungen werden angezeigt.</p>
+      </description>
+    </release>
+    <release version="2.1.5" date="2026-08-28">
+      <description>
+        <p>Adds an in-settings OpenWeather API-key check and an Automatic (system language) option while keeping German and English available as manual overrides.</p>
+        <p xml:lang="de">Ergänzt eine OpenWeather-API-Key-Prüfung direkt in den Einstellungen sowie Automatisch (Systemsprache); Deutsch und Englisch bleiben manuell wählbar.</p>
+      </description>
+    </release>
+    <release version="2.1.4" date="2026-08-28">
+      <description>
+        <p>Makes News source outages compact behind a warning icon, adds an option to hide headline ages, and adds OpenWeather as an optional weather source while keeping Open-Meteo as the no-key default.</p>
+        <p xml:lang="de">Zeigt News-Quellenausfälle kompakt hinter einem Warnsymbol, ergänzt eine Option zum Ausblenden des Meldungsalters und bietet OpenWeather optional als Wetterquelle an; Open-Meteo bleibt der Standard ohne API-Key.</p>
+      </description>
+    </release>
+    <release version="2.1.3" date="2026-08-28">
+      <description>
+        <p>Fixes a QML load failure caused by a duplicate opacity property in the prayer block, and adds a release check for duplicate direct QML property assignments.</p>
+        <p xml:lang="de">Behebt einen QML-Ladefehler durch eine doppelte opacity-Eigenschaft im Gebetszeiten-Block und ergänzt den Release-Check um eine Prüfung auf doppelte direkte QML-Eigenschaftszuweisungen.</p>
+      </description>
+    </release>
+    <release version="2.1.2" date="2026-08-28">
+      <description>
+        <p>Completes the asynchronous refresh path: refreshes are single-flight, background failures and already-running jobs are reported correctly, cached warnings are marked on their cards, weather cache identity includes coordinates, and server-side config writes preserve private permissions.</p>
+        <p xml:lang="de">Vervollständigt den asynchronen Aktualisierungspfad: Aktualisierungen laufen nur noch einzeln, Hintergrundfehler und bereits laufende Jobs werden korrekt gemeldet, gecachte Warnungen sind direkt markiert, Wetter-Cache-Identitäten enthalten Koordinaten und serverseitige Konfigurationsschreibvorgänge behalten private Dateirechte.</p>
+      </description>
+    </release>
+    <release version="2.1.1" date="2026-08-28">
+      <description>
+        <p>Fixes a warnings-block bug where an unreachable warning source could be rendered as "no current warnings". Refreshes now run in the background and are polled, so a slow refresh is no longer reported as a dead helper. The per-block News retry now bypasses the feed backoff as its button implies.</p>
+        <p xml:lang="de">Behebt einen Fehler im Warnblock, bei dem eine nicht erreichbare Warnquelle als „Keine aktuellen Warnungen“ dargestellt werden konnte. Aktualisierungen laufen jetzt im Hintergrund und werden abgefragt, sodass eine langsame Aktualisierung nicht mehr als ausgefallener Dienst gilt. Der News-Retry umgeht jetzt den Feed-Backoff, wie es die Schaltfläche verspricht.</p>
+      </description>
+    </release>
+    <release version="2.1.0" date="2026-08-27">
+      <description>
+        <p>Feed failures now name their actual cause instead of an exception class, with a single summary that points at the VPN when several publishers refuse the current exit IP. Feeds and weather locations are fetched in parallel, use conditional requests and gzip, and back off after repeated failures.</p>
+        <p xml:lang="de">Feed-Fehler nennen jetzt die tatsächliche Ursache statt eines Exception-Namens, mit einer Zusammenfassung, die auf das VPN hinweist, wenn mehrere Anbieter die aktuelle Exit-IP ablehnen. Feeds und Wetterorte werden parallel abgerufen, nutzen bedingte Anfragen und gzip und pausieren nach wiederholten Fehlern.</p>
+      </description>
+    </release>
     <release version="2.0.19" date="2026-05-24">
       <description>
         <p>Fixes duplicate GeoSphere Austria warnings by merging identical warning slices into one card with the latest expiry time.</p>

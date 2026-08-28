@@ -4,12 +4,21 @@ Diese Datei fasst die externen Quellen zusammen, die "Die Lage" / "Daily Briefin
 
 ## Wetter
 
-Quelle: Open-Meteo
+Standardquelle: Open-Meteo
 
 - https://open-meteo.com/
 - https://open-meteo.com/en/docs
 
-Open-Meteo ist eine offene Wetter-API und kann ohne API-Key genutzt werden. Im Widget werden die Daten nur für die kompakte Textanzeige verwendet. Wetterorte werden als `Name|Breitengrad|Längengrad` eingetragen. Koordinaten lassen sich z. B. über OpenStreetMap oder einen Geocoder ermitteln.
+Open-Meteo wird standardmäßig verwendet und benötigt für die kostenlose nicht-kommerzielle API keinen API-Key. Wetterorte werden als `Name|Breitengrad|Längengrad` eingetragen. Koordinaten lassen sich z. B. über OpenStreetMap oder einen Geocoder ermitteln.
+
+Optionale Alternative: OpenWeather
+
+- https://openweathermap.org/
+- https://openweathermap.org/api/current
+- https://openweathermap.org/api/forecast5
+- https://openweathermap.org/price
+
+Wird in den Einstellungen ein OpenWeather-API-Key hinterlegt, verwendet der Wetterblock stattdessen OpenWeather Current Weather und den 5-Tage-/3-Stunden-Forecast. Ohne Key bleibt Open-Meteo aktiv. Die alternative Quelle ist zum Vergleichen gedacht; das Widget verspricht keine grundsätzlich höhere Genauigkeit. Der Key wird ausschließlich lokal in `~/.config/die-lage/config.json` gespeichert; die Datei wird mit Modus 0600 geschützt. Die auffällige Quellenangabe steht nicht in der Überschrift: Ein kleines Info-Symbol öffnet die ausführlicheren Angaben, zusätzlich bleibt am Ende des Wetterblocks eine sehr zurückhaltende sichtbare Quellenzeile. Open-Meteo-Daten stehen unter CC BY 4.0 und verlangen Quellenangabe; der Info-Dialog verlinkt deshalb auch die Lizenz und weist darauf hin, dass Die Lage die gelieferten Werte für die Darstellung normalisiert. OpenWeather verlangt bei den entsprechenden Self-Service-/Free-Lizenzen sichtbare Attribution; deshalb bleiben der vorgeschriebene Hinweis, der Anbieter-Link und ein offizielles OpenWeather-Logo im sichtbaren Wetterblock erhalten. Die jeweils für den eigenen OpenWeather-Tarif geltenden Lizenzbedingungen sind zusätzlich beim Anbieter zu prüfen.
 
 ## Islamische Gebetszeiten
 

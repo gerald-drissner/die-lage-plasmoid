@@ -6,6 +6,20 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+SuccessExitStatus=75
+UMask=0077
 Nice=10
 IOSchedulingClass=idle
+# Same hardening as dielage-cache.service. Both run the identical script, so
+# running one of them with fewer restrictions than the other made no sense.
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=64
 ExecStart=%h/.local/bin/dielage-cache.py --force

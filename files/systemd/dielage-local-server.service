@@ -5,13 +5,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+UMask=0077
 ExecStart=%h/.local/bin/dielage-server.py
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
 PrivateTmp=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
 LockPersonality=yes
+# The helper is a small JSON responder; if it ever leaks it should be capped
+# rather than taking the session down with it.
+MemoryMax=256M
+TasksMax=64
 
 [Install]
 WantedBy=default.target

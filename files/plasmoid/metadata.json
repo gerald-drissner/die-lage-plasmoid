@@ -10,16 +10,16 @@
     "Description": "Die Lage – kompaktes Lagebild für den Plasma-Desktop: RSS-Nachrichten, Wetter, Warnmeldungen, islamische Gebetszeiten, Märkte und Systemstatus.",
     "Description[en]": "Daily Briefing – a compact situation board for the Plasma desktop: RSS news, weather, warnings, Islamic prayer times, markets and system status.",
     "EnabledByDefault": true,
-    "Icon": "/icons/dielage.svg",
+    "Icon": "view-list-details",
     "Id": "com.drissner.dielage",
     "License": "MIT",
     "Name": "Die Lage",
     "Name[en]": "Daily Briefing",
-    "Version": "2.0.19",
+    "Version": "2.1.7",
     "Website": "https://github.com/gerald-drissner/die-lage-plasmoid",
     "Copyright": "© 2026 Gerald Drißner"
   },
   "X-Plasma-API-Minimum-Version": "6.0",
   "KPackageStructure": "Plasma/Applet",
-  "Version": "2.0.19"
+  "Version": "2.1.7"
 }

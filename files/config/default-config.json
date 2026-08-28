@@ -139,7 +139,7 @@
     "news_font_family": "",
     "news_font_size_offset": 0,
     "news_font_size": 16,
-    "language": "de",
+    "language": "auto",
     "panel_mode": "icon",
     "desktop_background_mode": "default",
     "desktop_background_color": "",
@@ -157,7 +157,12 @@
     "prayer_upcoming_highlight": true,
     "panel_popup_width": 600,
     "prayer_upcoming_before_minutes": 45,
-    "prayer_now_after_minutes": 1
+    "prayer_now_after_minutes": 1,
+    "news_show_age": true,
+    "news_age_color_enabled": true,
+    "news_age_color_minutes": 120,
+    "news_age_recent_color": "",
+    "news_age_older_color": ""
   },
   "blocks": {
     "weather": true,
@@ -190,5 +195,8 @@
     "markets": false,
     "news": false,
     "system": false
+  },
+  "weather": {
+    "openweather_api_key": ""
   }
 }

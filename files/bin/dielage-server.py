@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import importlib.util
@@ -14,6 +15,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 
 HOME = Path.home()
 CACHE_DIR = HOME / ".cache" / "die-lage"
@@ -21,6 +23,10 @@ CONFIG_DIR = HOME / ".config" / "die-lage"
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    CONFIG_DIR.chmod(0o700)
+except OSError:
+    pass
 
 CACHE_FILE = CACHE_DIR / "rss.json"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -69,26 +75,35 @@ MAX_POST_BYTES = 256 * 1024
 REQUIRED_POST_CONTENT_TYPE = "application/json"
 ALLOWED_REFRESH_BLOCKS = {"weather", "system", "markets", "news"}
 
+# Emergency fallback only. The shipped files/config/default-config.json is the
+# single source of truth and is what load_default_config() reads at runtime.
+# This literal is generated from that file at release time; do not hand-edit it.
 DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://www.tagesschau.de/xml/rss2/'},
            {'limit': 5, 'name': 'NTV', 'url': 'https://www.n-tv.de/rss'},
            {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
            {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
            {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
-           {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
+           {'limit': 4,
+            'name': 'Haaretz ME',
+            'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
            {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
            {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
-           {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
+           {'limit': 3,
+            'name': 'RBB24',
+            'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
            {'limit': 3,
             'name': 'Polizei Berlin',
             'url': 'https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml'},
-           {'limit': 3, 'name': 'Heise online', 'url': 'https://www.heise.de/newsticker/heise.rdf'}],
+           {'limit': 3,
+            'name': 'Heise online',
+            'url': 'https://www.heise.de/newsticker/heise.rdf'}],
  'weather_locations': [{'name': 'Hennigsdorf', 'lat': 52.6391, 'lon': 13.209},
                        {'name': 'Berlin', 'lat': 52.5155, 'lon': 13.4546},
                        {'name': 'Bludenz', 'lat': 47.1527, 'lon': 9.8276},
                        {'name': 'El Paso', 'lat': 31.7619, 'lon': -106.485},
                        {'name': 'Nashville', 'lat': 36.1744, 'lon': -86.76796},
                        {'name': 'Alexandria', 'lat': 31.2156, 'lon': 29.9553}],
- 'nina_codes': [{'source': 'nina', 'name': 'Berlin', 'code': '110000000000'}],
+ 'nina_codes': [{'name': 'Berlin', 'code': '110000000000', 'source': 'nina'}],
  'prayer': {'city': 'Berlin', 'country': 'Germany', 'method': 3},
  'markets': {'currencies': ['USD', 'GBP', 'CHF'],
              'indices': [{'name': 'Dow Jones', 'symbol': '^DJI'},
@@ -106,44 +121,56 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
  'local_server_port': 8765,
  'boot_refresh_enabled': True,
  'boot_refresh_delay_seconds': 120,
- 'system': {'show_info': True,
-            'show_network': True,
-            'show_public_network': False,
-            'show_vpn': True,
-            'vpn_label': '',
-            'show_updates': True},
  'ui': {'font_size': 16,
         'highlight_color': '',
-        'desktop_background_mode': 'default',
-        'desktop_background_color': '',
         'news_font_family': '',
         'news_font_size_offset': 0,
         'news_font_size': 16,
-        'language': 'de',
+        'language': 'auto',
         'panel_mode': 'icon',
+        'desktop_background_mode': 'default',
+        'desktop_background_color': '',
+        'custom_title': '',
+        'separator_style': 'subtle',
+        'news_links_clickable': True,
+        'title_style': 'accent',
         'panel_icon_mode': 'dielage',
         'panel_theme_icon': 'view-list-details',
         'panel_warning_badge': True,
         'panel_no_warnings_mode': 'icon',
-        'panel_width': 24,
-        'panel_popup_width': 600,
-        'panel_middle_click_refresh': True,
         'block_heading_icons': True,
+        'panel_width': 24,
+        'panel_middle_click_refresh': True,
         'prayer_upcoming_highlight': True,
+        'panel_popup_width': 600,
         'prayer_upcoming_before_minutes': 45,
         'prayer_now_after_minutes': 1,
-        'custom_title': '',
-        'separator_style': 'subtle',
-        'news_links_clickable': True,
-        'title_style': 'accent'},
- 'blocks': {'weather': True, 'prayer': True, 'nina': True, 'news': True, 'markets': True, 'system': True},
+        'news_show_age': True,
+        'news_age_color_enabled': True,
+        'news_age_color_minutes': 120,
+        'news_age_recent_color': '',
+        'news_age_older_color': ''},
+ 'blocks': {'weather': True,
+            'prayer': True,
+            'nina': True,
+            'news': True,
+            'markets': True,
+            'system': True},
  'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
+ 'system': {'show_info': True,
+            'show_network': True,
+            'show_public_network': False,
+            'show_updates': True,
+            'show_vpn': True,
+            'vpn_label': ''},
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
                       'markets': False,
                       'news': False,
-                      'system': False}}
+                      'system': False},
+ 'weather': {'openweather_api_key': ''}}
+
 INDEX_SYMBOL_ALIASES = {
     "^DAX": "^GDAXI",
     "DAX": "^GDAXI",
@@ -194,6 +221,10 @@ def atomic_write_json(path: Path, data: dict) -> None:
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # config.json may contain API keys.  Keep the permission invariant even
+        # when this server-side writer replaces an existing 0600 file under a
+        # permissive umask.
+        tmp.chmod(0o600)
         tmp.replace(path)
     except BaseException:
         try:
@@ -290,8 +321,11 @@ def clear_cache_files() -> list[str]:
     for path in CACHE_DIR.iterdir():
         if not path.is_file():
             continue
-        # rss.json is the real cache. tmp files are atomic-write leftovers.
-        if path.name == "rss.json" or path.name.startswith("rss.json.tmp."):
+        # rss.json is the real cache, feedstate.json holds ETags, failure
+        # counters and backoff windows. Leaving the latter behind meant
+        # "cache cleared" was not true: a feed still in a 2 h backoff stayed
+        # in it, and stale validators could suppress a full refetch.
+        if path.name in ("rss.json", "feedstate.json") or path.name.startswith(("rss.json.tmp.", "feedstate.json.tmp.")):
             try:
                 path.unlink()
                 removed.append(path.name)
@@ -301,9 +335,43 @@ def clear_cache_files() -> list[str]:
 
 
 def delayed_service_restart() -> None:
-    # Spawn a detached child immediately and let the child sleep.  This survives
-    # the parent process exiting during the small delay window, unlike a daemon
-    # Python thread that can be killed before it calls systemctl.
+    """Ask systemd to restart this service a moment from now.
+
+    The obvious approach - fork a shell that sleeps and then calls systemctl -
+    puts the helper process inside this service's own cgroup. With the default
+    KillMode=control-group, the stop phase of the restart kills exactly that
+    helper. It happened to work because the restart job is already queued in
+    the manager by then, but it is a race we do not need to run.
+
+    systemd-run creates a transient unit in its own cgroup, so the trigger
+    survives us being torn down. The shell form stays as a fallback for
+    systems where systemd-run is unavailable.
+    """
+    if shutil.which("systemd-run"):
+        try:
+            completed = subprocess.run(
+                [
+                    "systemd-run", "--user", "--quiet", "--collect",
+                    "--on-active=1",
+                    # Unique unit name: a fixed one collides if the user saves
+                    # settings twice in quick succession and the first trigger
+                    # unit has not been collected yet.
+                    f"--unit=dielage-restart-{os.getpid()}-{int(time.time())}",
+                    "systemctl", "--user", "restart", "dielage-local-server.service",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            # Only skip the fallback when systemd-run actually accepted the job.
+            # Returning unconditionally meant a non-zero exit left the service
+            # never restarting and the fallback never running.
+            if completed.returncode == 0:
+                return
+        except Exception:
+            pass
+
     subprocess.Popen(
         ["sh", "-c", "sleep 0.35; systemctl --user restart dielage-local-server.service"],
         stdout=subprocess.DEVNULL,
@@ -326,11 +394,13 @@ def load_current_config() -> dict:
 def load_config_without_ensure() -> dict:
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return merge_config(data)
-    except Exception:
-        pass
-    return merge_config(load_default_config())
+        if not isinstance(data, dict):
+            raise ValueError("config is not a JSON object")
+        return merge_config(data)
+    except Exception as exc:
+        # Existing-but-corrupt config is user data, not an invitation to reset
+        # silently to defaults. Surface the error and leave the file untouched.
+        raise RuntimeError(f"invalid config.json: {type(exc).__name__}") from exc
 
 
 def deep_update(base: dict, patch: dict) -> dict:
@@ -353,6 +423,11 @@ def merge_config(data: dict) -> dict:
 
     data.setdefault("feeds", copy.deepcopy(defaults["feeds"]))
     data.setdefault("weather_locations", copy.deepcopy(defaults["weather_locations"]))
+    weather = data.setdefault("weather", copy.deepcopy(defaults.get("weather", {"openweather_api_key": ""})))
+    if not isinstance(weather, dict):
+        weather = copy.deepcopy(defaults.get("weather", {"openweather_api_key": ""}))
+        data["weather"] = weather
+    weather.setdefault("openweather_api_key", defaults.get("weather", {}).get("openweather_api_key", ""))
     data.setdefault("nina_codes", copy.deepcopy(defaults["nina_codes"]))
     old_default_nina_codes = [
         {"source": "nina", "name": "Berlin", "code": "110000000000"},
@@ -417,7 +492,12 @@ def merge_config(data: dict) -> dict:
     # append any missing ones at the end. This way a stale config from an
     # older version automatically gains the default order without losing
     # the user's other settings.
-    valid_block_ids = ["nina", "weather", "prayer", "markets", "news", "system"]
+    # Take the canonical order from the shipped defaults instead of repeating
+    # it here. The hardcoded list had already drifted: it ordered system last,
+    # while default-config.json puts system before markets.
+    valid_block_ids = [str(x) for x in (defaults.get("block_order") or []) if str(x).strip()]
+    if not valid_block_ids:
+        valid_block_ids = ["nina", "weather", "prayer", "system", "markets", "news"]
     raw_order = data.get("block_order")
     cleaned_order: list[str] = []
     seen_ids: set[str] = set()
@@ -440,24 +520,105 @@ def merge_config(data: dict) -> dict:
 
     return data
 
-def run_refresh(block: str | None = None) -> bool:
-    # Do not let two fast clicks or one timer + one manual refresh spawn parallel
-    # cache processes.  If a refresh is already running, report success with an
-    # "already_running" hint instead of blocking another HTTP worker thread.
-    if not REFRESH_LOCK.acquire(blocking=False):
-        return False
+# Exit code dielage-cache.py uses when another cache process holds the file
+# lock. Treated as "already running", not as a completed refresh.
+EXIT_LOCK_BUSY = 75
+
+# Refresh state shared between the HTTP workers and the background job thread.
+REFRESH_STATE = {
+    "running": False,
+    "block": "",
+    "started": 0.0,
+    "finished": 0.0,
+    "ok": True,
+    "error": "",
+    "already_running": False,
+}
+REFRESH_STATE_LOCK = threading.Lock()
+
+
+def _refresh_state_snapshot() -> dict:
+    with REFRESH_STATE_LOCK:
+        return dict(REFRESH_STATE)
+
+
+def _run_refresh_job(block: str | None) -> None:
+    """Run the cache helper to completion in a background thread.
+
+    Refresh used to run inline in the HTTP handler, so the client had to hold a
+    request open for as long as the whole fetch took - up to the 120 s server
+    timeout. The QML side gives up after 25 s and concludes the helper is dead,
+    which it is not. The job now runs here and the client polls /refresh-status
+    instead, so no request is ever long-lived.
+    """
+    ok, error, busy = True, "", False
     try:
+        # Global refresh intentionally forces every block. A block refresh must
+        # stay block-scoped; --block is itself considered manual by the cache
+        # helper, so it already bypasses feed backoff without --force.
         args = [str(CACHE_SCRIPT), "--force"] if not block else [str(CACHE_SCRIPT), "--block", block]
-        subprocess.run(
+        completed = subprocess.run(
             args,
-            check=True,
-            timeout=120,
+            check=False,
+            timeout=300,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        return True
+        if completed.returncode == EXIT_LOCK_BUSY:
+            # The systemd timer got there first; its result lands in the same
+            # cache file, so this is not an error.
+            busy = True
+        elif completed.returncode != 0:
+            ok, error = False, f"cache helper exited with {completed.returncode}"
+    except subprocess.TimeoutExpired:
+        ok, error = False, "cache helper timed out"
+    except Exception as exc:
+        ok, error = False, str(exc)[:200]
     finally:
+        with REFRESH_STATE_LOCK:
+            REFRESH_STATE.update({
+                "running": False,
+                "finished": time.time(),
+                "ok": ok,
+                "error": error,
+                "already_running": busy,
+            })
         REFRESH_LOCK.release()
+
+
+def start_refresh(block: str | None = None) -> dict:
+    """Start a refresh if none is in flight. Returns immediately."""
+    if not REFRESH_LOCK.acquire(blocking=False):
+        return {"ok": True, "started": False, "already_running": True}
+
+    with REFRESH_STATE_LOCK:
+        REFRESH_STATE.update({
+            "running": True,
+            "block": block or "",
+            "started": time.time(),
+            "finished": 0.0,
+            "ok": True,
+            "error": "",
+            "already_running": False,
+        })
+
+    thread = threading.Thread(target=_run_refresh_job, args=(block,), daemon=True)
+    try:
+        thread.start()
+    except Exception as exc:
+        # Thread creation itself can fail under severe resource pressure.  Do
+        # not leave the single-flight lock held forever in that case.
+        with REFRESH_STATE_LOCK:
+            REFRESH_STATE.update({
+                "running": False,
+                "finished": time.time(),
+                "ok": False,
+                "error": f"could not start refresh worker: {exc}"[:200],
+                "already_running": False,
+            })
+        REFRESH_LOCK.release()
+        raise
+    return {"ok": True, "started": True, "already_running": False}
 
 
 def _command_status(command: str, label: str, note: str = "") -> dict:
@@ -482,27 +643,39 @@ def _module_status(module: str, label: str, note: str = "") -> dict:
     }
 
 
+class JsonBodyError(ValueError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = int(status)
+
+
 def read_json_post_body(handler) -> dict:
     raw_length = handler.headers.get("Content-Length")
     if raw_length is None:
-        raise ValueError("missing Content-Length")
+        raise JsonBodyError(411, "missing Content-Length")
     try:
         length = int(raw_length)
     except (TypeError, ValueError):
-        raise ValueError("invalid Content-Length") from None
+        raise JsonBodyError(400, "invalid Content-Length") from None
     if length <= 0:
         return {}
     if length > MAX_POST_BYTES:
-        raise ValueError("payload too large")
-    body = handler.rfile.read(length).decode("utf-8")
-    data = json.loads(body or "{}")
+        raise JsonBodyError(413, "payload too large")
+    try:
+        body = handler.rfile.read(length).decode("utf-8")
+    except UnicodeDecodeError:
+        raise JsonBodyError(400, "request body is not UTF-8") from None
+    try:
+        data = json.loads(body or "{}")
+    except json.JSONDecodeError as exc:
+        raise JsonBodyError(400, f"invalid JSON: {exc.msg}") from None
     if not isinstance(data, dict):
-        raise ValueError("JSON body must be an object")
+        raise JsonBodyError(400, "JSON body must be an object")
     return data
 
 
 def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
-    request_headers = {"User-Agent": "DieLage/2.0.19 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers = {"User-Agent": "DieLage/2.1.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
     request_headers.update(headers)
     req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -561,6 +734,50 @@ def check_market_apis(twelve_key: str, finnhub_key: str) -> dict:
     return {"ok": ok, "checks": checks}
 
 
+def check_openweather_api(key: str, lat=52.52, lon=13.405, language: str = "en") -> dict:
+    """Validate an unsaved OpenWeather key with one lightweight current-weather request."""
+    key = str(key or "").strip()
+    if not key:
+        return {"ok": False, "configured": False, "reason": "missing", "message": "missing key"}
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+        if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
+            raise ValueError
+    except Exception:
+        lat_f, lon_f = 52.52, 13.405
+    lang = "de" if str(language or "").lower().startswith("de") else "en"
+    params = urllib.parse.urlencode({
+        "lat": lat_f,
+        "lon": lon_f,
+        "appid": key,
+        "units": "metric",
+        "lang": lang,
+    })
+    url = "https://api.openweathermap.org/data/2.5/weather?" + params
+    try:
+        payload = _api_probe_json(url, {}, max_bytes=200_000)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return {"ok": False, "configured": True, "reason": "unauthorized", "message": "HTTP 401"}
+        if exc.code == 429:
+            return {"ok": False, "configured": True, "reason": "rate_limited", "message": "HTTP 429"}
+        return {"ok": False, "configured": True, "reason": "http_error", "message": f"HTTP {exc.code}"}
+    except Exception as exc:
+        # Do not echo a full exception string here: some URL-related exceptions
+        # can contain the request URL, which would include the API key.
+        return {"ok": False, "configured": True, "reason": "network", "message": type(exc).__name__}
+
+    main = payload.get("main") if isinstance(payload.get("main"), dict) else {}
+    if main.get("temp") is None:
+        return {"ok": False, "configured": True, "reason": "invalid_response", "message": "no temperature returned"}
+    return {
+        "ok": True,
+        "configured": True,
+        "reason": "ok",
+    }
+
+
 def tool_status() -> dict:
     """Return the helper/runtime tools Die Lage can use on this machine."""
     python_item = {
@@ -603,7 +820,8 @@ def tool_status() -> dict:
 
     return {
         "ok": True,
-        "version": "2.0.19",
+        "service": "com.drissner.dielage",
+        "version": "2.1.7",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -614,6 +832,10 @@ def tool_status() -> dict:
 class Handler(BaseHTTPRequestHandler):
     server_version = "DieLageLocal/1"
     sys_version = ""
+    # Drop connections that stall mid-request. The helper only ever talks to
+    # the local plasmoid, but an idle half-open socket should not pin a worker
+    # thread for the lifetime of the session.
+    timeout = 20
 
     def version_string(self) -> str:
         return self.server_version
@@ -646,6 +868,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": False, "error": "forbidden origin"}, 403)
         return True
 
+    def _send_security_headers(self):
+        # The responses are JSON only and are never meant to be rendered or
+        # embedded. These headers cost nothing and close off content sniffing
+        # and framing tricks if a browser ever reaches the loopback port.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+
     def _send_cors_headers(self):
         self.send_header("Vary", "Origin")
         origin = self._request_origin()
@@ -658,6 +888,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self._send_cors_headers()
+        self._send_security_headers()
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
@@ -672,6 +903,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self._send_cors_headers()
+        self._send_security_headers()
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
@@ -680,9 +912,10 @@ class Handler(BaseHTTPRequestHandler):
         if self._reject_if_bad_origin():
             return
         path = urllib.parse.urlparse(self.path).path
-        if path in ("/status", "/rss.json", "/config", "/tools", "/check-market-apis"):
+        if path in ("/status", "/rss.json", "/config", "/tools", "/refresh-status", "/check-market-apis", "/check-weather-api"):
             self.send_response(200)
             self._send_cors_headers()
+            self._send_security_headers()
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
         else:
@@ -704,6 +937,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self._send_cors_headers()
+        self._send_security_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -714,11 +948,25 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "version": "2.0.19", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "service": "com.drissner.dielage", "version": "2.1.7", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":
-            self._send_json(load_current_config())
+            try:
+                self._send_json(load_current_config())
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/refresh-status":
+            state = _refresh_state_snapshot()
+            self._send_json({
+                "ok": True,
+                "running": bool(state["running"]),
+                "block": state["block"],
+                "finished": state["finished"],
+                "last_ok": bool(state["ok"]),
+                "error": state["error"],
+                "already_running": bool(state["already_running"]),
+            })
         elif path == "/tools":
             self._send_json(tool_status())
         else:
@@ -733,13 +981,12 @@ class Handler(BaseHTTPRequestHandler):
         # This blocks old-fashioned CSRF vectors such as plain HTML forms or
         # no-cors text/plain fetches that might omit an Origin header.  QML sets
         # the header explicitly for /config, /refresh and /reset.
-        if path in ("/config", "/refresh", "/refresh-block", "/reset", "/clear-cache", "/restart", "/check-market-apis") and self._json_post_required():
+        if path in ("/config", "/refresh", "/refresh-block", "/reset", "/clear-cache", "/restart", "/check-market-apis", "/check-weather-api") and self._json_post_required():
             return
 
         if path == "/refresh":
             try:
-                did_run = run_refresh()
-                self._send_json({"ok": True, "already_running": not did_run})
+                self._send_json(start_refresh())
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/refresh-block":
@@ -749,10 +996,11 @@ class Handler(BaseHTTPRequestHandler):
                 if block not in ALLOWED_REFRESH_BLOCKS:
                     self._send_json({"ok": False, "error": "invalid block"}, 400)
                     return
-                did_run = run_refresh(block)
-                self._send_json({"ok": True, "block": block, "already_running": not did_run})
-            except json.JSONDecodeError as exc:
-                self._send_json({"ok": False, "error": f"invalid JSON: {exc.msg}"}, 400)
+                result = start_refresh(block)
+                result["block"] = block
+                self._send_json(result)
+            except JsonBodyError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, exc.status)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/config":
@@ -799,8 +1047,21 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = read_json_post_body(self)
                 self._send_json(check_market_apis(payload.get("twelve_data_api_key", ""), payload.get("finnhub_api_key", "")))
-            except json.JSONDecodeError as exc:
-                self._send_json({"ok": False, "error": f"invalid JSON: {exc.msg}"}, 400)
+            except JsonBodyError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, exc.status)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/check-weather-api":
+            try:
+                payload = read_json_post_body(self)
+                self._send_json(check_openweather_api(
+                    payload.get("openweather_api_key", ""),
+                    payload.get("lat", 52.52),
+                    payload.get("lon", 13.405),
+                    payload.get("language", "en"),
+                ))
+            except JsonBodyError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, exc.status)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 500)
         elif path == "/clear-cache":
@@ -840,10 +1101,39 @@ class Handler(BaseHTTPRequestHandler):
             return super().log_message(fmt, *args)
         return
 
+class LocalServer(ThreadingHTTPServer):
+    # daemon_threads is already the ThreadingHTTPServer default; naming it here
+    # documents that worker threads must never keep the process alive.
+    daemon_threads = True
+    # Loopback-only listener: a queue this size is generous for one plasmoid.
+    request_queue_size = 16
+
+
 if __name__ == "__main__":
     ensure_config()
     try:
         apply_boot_timer_config(load_current_config())
     except Exception:
         pass
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+
+    httpd = LocalServer((HOST, PORT), Handler)
+
+    def _shutdown(signum, frame):
+        # systemd sends SIGTERM on stop/restart. Closing the listening socket
+        # explicitly means the next start can bind immediately instead of
+        # tripping over a lingering socket in the restart window.
+        try:
+            httpd.server_close()
+        finally:
+            raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    try:
+        httpd.serve_forever()
+    finally:
+        try:
+            httpd.server_close()
+        except Exception:
+            pass

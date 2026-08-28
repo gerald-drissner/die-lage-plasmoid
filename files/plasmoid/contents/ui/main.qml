@@ -69,11 +69,16 @@ PlasmoidItem {
     property bool settingsOpen: false
     property string settingsTab: "general"
     property bool saving: false
+    // Global refresh spinner and a separate single-flight guard.  A block
+    // refresh should not make the top button spin, but no second refresh may
+    // be started until the current one has completed or been released.
     property bool refreshing: false
+    property bool refreshJobActive: false
     property var blockRefreshing: ({})
 
     property string feedsText: ""
     property string weatherText: ""
+    property string openWeatherApiKey: ""
     property string ninaText: ""
     property string currenciesText: "USD, GBP, CHF"
     property string marketsText: ""
@@ -98,7 +103,7 @@ PlasmoidItem {
     // the same delta as the main UI font on later changes.
     property int newsSyncBaseFontSize: 18
     property bool newsFontSyncInProgress: false
-    property string uiLanguage: "de"
+    property string uiLanguage: "auto"
     property string fetchIntervalMinutes: "10"
     property string systemIntervalMinutes: "3"
     property bool bootRefreshEnabled: true
@@ -143,6 +148,13 @@ PlasmoidItem {
     // separatorStyle: "none", "subtle", "strong".
     property string separatorStyle: "subtle"
     property bool newsLinksClickable: true
+    property bool showNewsAge: true
+    // Optional visual age scale for RSS timestamps. Empty color values follow
+    // the active Plasma theme: newest = widget accent, oldest = text color.
+    property bool newsAgeColorEnabled: true
+    property string newsAgeColorWindowMinutes: "120"
+    property string newsAgeRecentColor: ""
+    property string newsAgeOlderColor: ""
     // titleStyle: "accent", "plain", "compact".
     property string titleStyle: "accent"
 
@@ -150,9 +162,8 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.0.19"
+    readonly property string appVersion: "2.1.7"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
-    readonly property string latestReleaseUrl: projectUrl + "/releases/latest"
     // The asset name is intentionally stable. Every public release should upload
     // die-lage-latest.zip in addition to the versioned installer ZIP, so first-run
     // users can always click the same download link from the setup screen.
@@ -174,6 +185,8 @@ PlasmoidItem {
     // loadConfig() based on whether the local helper answers. Used to
     // show the helper-missing setup screen instead of an empty popup.
     property bool helperOk: true
+    property string helperVersion: ""
+    property bool helperVersionMismatch: false
     property bool initialLoadDone: false
     property bool configLoaded: false
 
@@ -205,6 +218,9 @@ PlasmoidItem {
     property bool marketApiChecking: false
     property string marketApiStatusMessage: ""
     property bool marketApiStatusOk: true
+    property bool weatherApiChecking: false
+    property string weatherApiStatusMessage: ""
+    property bool weatherApiStatusOk: true
     property bool showNews: true
 
     property int baseFontSize: root.clampInt(root.uiFontSize, 16, 12, 34)
@@ -319,7 +335,10 @@ PlasmoidItem {
             root.saving = false
             root.refreshing = false
             root.helperStatusChecking = false
-            root.helperOk = false
+            // Do NOT flag the helper as unreachable here. Requests are all
+            // short now, but a slow machine can still trip the timeout while
+            // the helper is working perfectly well; marking it dead sent the
+            // user to the "install the helper" screen for no reason.
             root.errorText = root.t("requestTimedOut")
 
             // Per-purpose extras, kept for backwards compatibility.
@@ -341,8 +360,16 @@ PlasmoidItem {
             if (opts.clearMarketApiChecking) {
                 root.marketApiChecking = false
             }
+            if (opts.clearWeatherApiChecking) {
+                root.weatherApiChecking = false
+            }
             if (opts.clearToolsStatusChecking) {
                 root.toolsStatusChecking = false
+            }
+            if (opts.clearRefreshJob) {
+                refreshPollTimer.stop()
+                root.refreshPollBlock = ""
+                root.refreshJobActive = false
             }
             if (blockId) {
                 root.setBlockRefreshing(blockId, false)
@@ -386,6 +413,8 @@ PlasmoidItem {
         if (index >= ports.length) {
             root.portDiscoveryInProgress = false
             root.helperOk = false
+            root.helperVersion = ""
+            root.helperVersionMismatch = false
             root.initialLoadDone = true
             // No port in the configured range answered. This is "helper not
             // running" rather than a real HTTP error, so use a dedicated
@@ -412,7 +441,10 @@ PlasmoidItem {
                         if (data && data.ok === true
                             && typeof data.version === "string"
                             && /^\d+\.\d+\.\d+$/.test(data.version)
+                            && (!data.service || data.service === "com.drissner.dielage")
                             && Number(data.local_server_port) === port) {
+                            root.helperVersion = String(data.version)
+                            root.helperVersionMismatch = root.helperVersion !== root.appVersion
                             root.activeServerPort = port
                             root.pendingServerPort = 0
                             root.portDiscoveryInProgress = false
@@ -430,8 +462,25 @@ PlasmoidItem {
         xhr.send()
     }
 
+    function systemUiLanguage() {
+        try {
+            var localeName = String(Qt.locale().name || "").toLowerCase()
+            return localeName.indexOf("de") === 0 ? "de" : "en"
+        } catch (e) {
+            return "en"
+        }
+    }
+
+    function effectiveUiLanguage() {
+        var lang = String(root.uiLanguage || "auto").toLowerCase()
+        if (lang === "de" || lang === "en") {
+            return lang
+        }
+        return root.systemUiLanguage()
+    }
+
     function isEnglish() {
-        return root.uiLanguage === "en"
+        return root.effectiveUiLanguage() === "en"
     }
 
     function cleanSeparatorStyle(value) {
@@ -742,8 +791,14 @@ PlasmoidItem {
         return false
     }
 
-    function t(key) {
-        var en = {
+    // Translation tables, hoisted to properties in v2.1.0.
+    //
+    // These used to be two local `var` objects inside t(). t() is referenced
+    // from well over 250 property bindings, so every single evaluation built
+    // both ~250-key dictionaries and immediately discarded one of them. On any
+    // theme, font, language or size change that re-ran across the whole tree.
+    // As readonly properties they are constructed once per applet instance.
+    readonly property var i18nEn: ({
             "title": "Daily Briefing",
             "loading": "Loading…",
             "refresh": "Refresh",
@@ -794,8 +849,6 @@ PlasmoidItem {
             "restarting": "Restarting…",
             "restartLocalServiceDone": "Local service restart requested. The widget will reconnect automatically.",
             "clearCache": "Clear cache",
-            "clearCacheHelp": "Deletes Die Lage cache files in ~/.cache/die-lage. Settings and API keys are kept. After clearing, use Refresh to rebuild fresh data.",
-            "clearCacheConfirm": "Clear cached Die Lage data now? Settings and API keys are kept.",
             "clearCacheDone": "Cache cleared. Use Refresh to rebuild fresh data.",
             "clearCacheWorking": "Clearing cache …",
             "clearCacheFailed": "Cache could not be cleared. HTTP ",
@@ -823,6 +876,19 @@ PlasmoidItem {
             "newsFont": "News font",
             "newsLinksClickable": "RSS headlines are clickable",
             "newsLinksHelp": "When disabled, headlines are displayed as plain text and clicks do not open links.",
+            "showNewsAge": "Show age of RSS headlines",
+            "showNewsAgeHelp": "Shows how long ago each feed item was published, for example 12 min. or 2 hr. Feeds without a publication timestamp remain unchanged.",
+            "newsAgeColorEnabled": "Color-code headline age",
+            "newsAgeColorHelp": "Gradually fades the age label from the newest color to the older color. Empty color fields follow the Plasma theme. After the selected interval, the older color is kept.",
+            "newsAgeColorWindow": "Color scale duration (minutes)",
+            "newsAgeColorWindowHelp": "Default: 120 minutes. A headline published now starts at the newest color and reaches the older color at the end of this interval.",
+            "newsAgeRecentColor": "Newest age color",
+            "newsAgeOlderColor": "Older age color",
+            "newsAgeColorPlaceholderRecent": "empty = widget/Plasma accent",
+            "newsAgeColorPlaceholderOlder": "empty = Plasma text color",
+            "newsAgeColorPreview": "Age-color preview",
+            "newsAgeColorNow": "now",
+            "newsAgeColorEnd": "end",
             "newsFontFamily": "Font family for news",
             "newsFontFamilyHint": "Only used if the font is installed. Leave empty for the normal Plasma font.",
             "newsFontSize": "RSS/news font size (px)",
@@ -839,8 +905,24 @@ PlasmoidItem {
             "system": "System",
             "news": "News",
             "rssSources": "RSS sources – one line per source: Name|URL|Count",
+            "weatherSourceSettings": "Weather data source",
             "weatherPlaces": "Weather locations – one line per location: Name|Latitude|Longitude",
-            "weatherHelp": "Weather source: Open-Meteo (free for non-commercial use, no API key). Used only to create the compact text/weather display. Coordinates are decimal GPS values; get them from OpenStreetMap, open-meteo.com/en/docs or any geocoder.",
+            "weatherHelp": "Default source: Open-Meteo (free for non-commercial use, no API key). Coordinates are decimal GPS values; get them from OpenStreetMap, open-meteo.com/en/docs or any geocoder.",
+            "weatherApiKey": "OpenWeather API key – optional",
+            "weatherApiHelp": "Leave empty to use Open-Meteo. If a valid OpenWeather API key is entered, Die Lage switches the Weather block completely to OpenWeather; Open-Meteo is then not queried in parallel. The screen layout stays the same because both providers are mapped to the same fields. Accuracy varies by location, so OpenWeather is an alternative source rather than a guaranteed improvement. Get a key at openweathermap.org.",
+            "checkWeatherApi": "Check OpenWeather key",
+            "weatherApiChecking": "Checking OpenWeather API key …",
+            "weatherApiMissing": "Enter an OpenWeather API key first.",
+            "weatherApiOk": "OpenWeather API key works.",
+            "weatherApiUnauthorized": "OpenWeather rejected the key. Check the key or wait a little if it was created very recently.",
+            "weatherApiRateLimited": "OpenWeather rate limit reached. The key itself may still be valid; try again later.",
+            "weatherApiFailed": "OpenWeather key check failed",
+            "weatherSourceInfo": "Weather source and attribution",
+            "weatherSourceOpenWeatherInfo": "Weather data provided by OpenWeather. Die Lage normalizes the returned values for this compact display.",
+            "weatherSourceOpenMeteoInfo": "Weather data by Open-Meteo.com (CC BY 4.0). Die Lage normalizes the returned values for this compact display.",
+            "weatherSourceOpenProvider": "Open provider website",
+            "weatherSourceLicense": "Open CC BY 4.0 license",
+            "languageAuto": "Automatic (system language)",
             "ninaAreas": "Warning areas – one line per area/source",
             "ninaHelp": "Supported formats: SOURCE|Name|parameters. NINA|Name|ARS for Germany/BBK, GEOSPHERE|Name|lat|lon for exact Austrian point warnings, METEOALARM|Name|country-slug|include|exclude for European country feeds, NWS|Name|lat|lon|include|exclude for USA/NWS, or URL|Name|feed-url|include|exclude. include/exclude are optional comma-separated filters.",
             "ninaInternationalHelp": "Examples: NINA|Berlin|110000000000 · GEOSPHERE|Bludenz|47.1527|9.8276 · METEOALARM|Austria|austria|Vorarlberg · NWS|El Paso|31.7725|-106.461|El Paso · NWS|Nashville|36.1626|-86.7816|Davidson · URL|Own feed|https://example.org/warnings.atom. For Austria, GEOSPHERE is more precise than the country-wide MeteoAlarm feed.",
@@ -899,6 +981,7 @@ PlasmoidItem {
             "jsonError": "JSON error: ",
             "cacheUnavailable": "Cache unavailable: HTTP ",
             "helperNotReachable": "Local helper not reachable. Service may be stopped or listening on a different port.",
+            "helperVersionMismatch": "The local helper version does not match the widget. Install the current full installer ZIP so the background service is updated too.",
             "configError": "Configuration error: ",
             "configUnavailable": "Configuration unavailable: HTTP ",
             "saveFailed": "Save failed: HTTP ",
@@ -906,6 +989,8 @@ PlasmoidItem {
             "refreshBlock": "Refresh this block",
             "refreshBlockFailed": "Block refresh failed: HTTP ",
             "refreshBlockRunning": "Another refresh is already running. This block will update shortly.",
+            "refreshAlreadyRunning": "Another refresh is already running. New data will appear when it finishes.",
+            "refreshJobFailed": "Refresh failed. The previous data remains displayed.",
             "requestTimedOut": "Request timed out. The local helper did not answer in time.",
             "panelSettings": "Panel appearance",
             "panelMode": "Display when in a panel",
@@ -992,9 +1077,32 @@ PlasmoidItem {
             "copyCommand": "Copy command",
             "copied": "Copied",
             "openHomepage": "Project page",
-            "retryConnection": "Retry connection"
-        }
-        var de = {
+            "retryConnection": "Retry connection",
+            "feedStale": "cached",
+            "feedPaused": "paused",
+            "feedLastOk": "last successful update:",
+            "feedNeverOk": "never updated successfully",
+            "newsSourcesOk": "All sources up to date",
+            "newsShowDetails": "Show details per source",
+            "newsHideDetails": "Hide details",
+            "newsRetryNow": "Try again now",
+            "justNow": "just now",
+            "minutesAgoShort": "min ago",
+            "hoursAgoShort": "h ago",
+            "daysAgoShort": "d ago",
+            "newBadge": "new",
+            "offlineNotice": "No network connection. Showing the last cached data.",
+            "warnIncomplete": "Warning status incomplete",
+            "warnCachedItem": "cached warning",
+            "weatherCached": "cached",
+            "prayerCached": "cached times",
+            "prayerOutdated": "These times are not for today",
+            "refreshRunning": "Refreshing…",
+            "refreshTookLong": "The refresh is still running in the background.",
+            "sourceProblem": "Source problem",
+    })
+
+    readonly property var i18nDe: ({
             "title": "Die Lage",
             "loading": "Lädt…",
             "refresh": "Aktualisieren",
@@ -1045,8 +1153,6 @@ PlasmoidItem {
             "restarting": "Neustart läuft …",
             "restartLocalServiceDone": "Neustart des lokalen Dienstes angefordert. Das Widget verbindet sich automatisch neu.",
             "clearCache": "Cache löschen",
-            "clearCacheHelp": "Löscht nur Die-Lage-Cache-Dateien in ~/.cache/die-lage. Einstellungen und API-Keys bleiben erhalten. Danach Aktualisieren verwenden, um frische Daten aufzubauen.",
-            "clearCacheConfirm": "Zwischengespeicherte Die-Lage-Daten jetzt löschen? Einstellungen und API-Keys bleiben erhalten.",
             "clearCacheDone": "Cache gelöscht. Mit Aktualisieren werden frische Daten aufgebaut.",
             "clearCacheWorking": "Cache wird gelöscht …",
             "clearCacheFailed": "Cache konnte nicht gelöscht werden. HTTP ",
@@ -1074,6 +1180,19 @@ PlasmoidItem {
             "newsFont": "Nachrichten-Schrift",
             "newsLinksClickable": "RSS-Überschriften sind anklickbar",
             "newsLinksHelp": "Wenn deaktiviert, werden Überschriften nur als Text angezeigt und Links nicht geöffnet.",
+            "showNewsAge": "Alter der RSS-Meldungen anzeigen",
+            "showNewsAgeHelp": "Zeigt bei jeder Meldung an, wie lange ihre Veröffentlichung zurückliegt, zum Beispiel 12 Min. oder 2 Std. Feeds ohne Zeitstempel bleiben unverändert.",
+            "newsAgeColorEnabled": "Alter der Meldungen farblich markieren",
+            "newsAgeColorHelp": "Die Zeitangabe geht stufenlos von der Farbe für neue Meldungen in die Farbe für ältere Meldungen über. Leere Farbfelder verwenden das Plasma-Farbschema. Nach dem gewählten Zeitraum bleibt die ältere Farbe erhalten.",
+            "newsAgeColorWindow": "Dauer der Farbskala (Minuten)",
+            "newsAgeColorWindowHelp": "Standard: 120 Minuten. Eine gerade veröffentlichte Meldung beginnt mit der neuesten Farbe und erreicht am Ende dieses Zeitraums die ältere Farbe.",
+            "newsAgeRecentColor": "Farbe für neueste Meldungen",
+            "newsAgeOlderColor": "Farbe für ältere Meldungen",
+            "newsAgeColorPlaceholderRecent": "leer = Widget-/Plasma-Akzent",
+            "newsAgeColorPlaceholderOlder": "leer = Plasma-Textfarbe",
+            "newsAgeColorPreview": "Vorschau der Altersfarben",
+            "newsAgeColorNow": "jetzt",
+            "newsAgeColorEnd": "Ende",
             "newsFontFamily": "Schriftart für Nachrichten",
             "newsFontFamilyHint": "Wird nur genutzt, wenn die Schrift installiert ist. Leer lassen = normale Plasma-Schrift.",
             "newsFontSize": "RSS-/Nachrichten-Schriftgröße (px)",
@@ -1090,8 +1209,24 @@ PlasmoidItem {
             "system": "System",
             "news": "Nachrichten",
             "rssSources": "RSS-Quellen – eine Zeile pro Quelle: Name|URL|Anzahl",
+            "weatherSourceSettings": "Wetterquelle",
             "weatherPlaces": "Wetterorte – eine Zeile pro Ort: Name|Breitengrad|Längengrad",
-            "weatherHelp": "Wetterquelle: Open-Meteo (für nicht-kommerzielle Nutzung kostenlos, kein API-Key). Wird nur für die kompakte Text-/Wetteranzeige genutzt. Koordinaten sind Dezimal-GPS-Werte; Sie erhalten sie z. B. über OpenStreetMap, open-meteo.com/en/docs oder einen Geocoder.",
+            "weatherHelp": "Standardquelle: Open-Meteo (für nicht-kommerzielle Nutzung kostenlos, kein API-Key). Koordinaten sind Dezimal-GPS-Werte; Sie erhalten sie z. B. über OpenStreetMap, open-meteo.com/en/docs oder einen Geocoder.",
+            "weatherApiKey": "OpenWeather API-Key – optional",
+            "weatherApiHelp": "Leer lassen = Open-Meteo. Sobald ein gültiger OpenWeather-API-Key eingetragen ist, wechselt der Wetterblock vollständig zu OpenWeather; Open-Meteo wird dann nicht parallel abgefragt. Die Darstellung bleibt gleich, weil beide Anbieter auf dieselben Felder abgebildet werden. Die Genauigkeit hängt vom Ort ab; OpenWeather ist daher eine alternative Quelle und nicht garantiert genauer. Einen Key erhalten Sie auf openweathermap.org.",
+            "checkWeatherApi": "OpenWeather-Key prüfen",
+            "weatherApiChecking": "OpenWeather-API-Key wird geprüft …",
+            "weatherApiMissing": "Bitte zuerst einen OpenWeather-API-Key eintragen.",
+            "weatherApiOk": "OpenWeather-API-Key funktioniert.",
+            "weatherApiUnauthorized": "OpenWeather hat den Key abgelehnt. Prüfen Sie den Key oder warten Sie etwas, falls er gerade erst erstellt wurde.",
+            "weatherApiRateLimited": "OpenWeather-Limit erreicht. Der Key kann trotzdem gültig sein; versuchen Sie es später erneut.",
+            "weatherApiFailed": "OpenWeather-Key-Prüfung fehlgeschlagen",
+            "weatherSourceInfo": "Wetterquelle und Quellenangabe",
+            "weatherSourceOpenWeatherInfo": "Weather data provided by OpenWeather. Die Lage vereinheitlicht die gelieferten Werte für diese kompakte Darstellung.",
+            "weatherSourceOpenMeteoInfo": "Wetterdaten von Open-Meteo.com (CC BY 4.0). Die Lage vereinheitlicht die gelieferten Werte für diese kompakte Darstellung.",
+            "weatherSourceOpenProvider": "Webseite des Anbieters öffnen",
+            "weatherSourceLicense": "CC-BY-4.0-Lizenz öffnen",
+            "languageAuto": "Automatisch (Systemsprache)",
             "ninaAreas": "Warnmeldungen – eine Zeile pro Quelle/Gebiet",
             "ninaHelp": "Unterstützte Formate: QUELLE|Name|Parameter. NINA|Name|ARS für Deutschland/BBK, GEOSPHERE|Name|lat|lon für genaue österreichische Punktwarnungen, METEOALARM|Name|country-slug|include|exclude für europäische Länderfeeds, NWS|Name|lat|lon|include|exclude für USA/NWS oder URL|Name|Feed-URL|include|exclude. include/exclude sind optionale komma-getrennte Filter.",
             "ninaInternationalHelp": "Beispiele: NINA|Berlin|110000000000 · GEOSPHERE|Bludenz|47.1527|9.8276 · METEOALARM|Österreich|austria|Vorarlberg · NWS|El Paso|31.7725|-106.461|El Paso · NWS|Nashville|36.1626|-86.7816|Davidson · URL|Eigener Feed|https://example.org/warnings.atom. Für Österreich ist GEOSPHERE genauer als der landesweite MeteoAlarm-Feed.",
@@ -1150,6 +1285,7 @@ PlasmoidItem {
             "jsonError": "JSON-Fehler: ",
             "cacheUnavailable": "Cache nicht erreichbar: HTTP ",
             "helperNotReachable": "Lokaler Hintergrunddienst nicht erreichbar. Der Dienst läuft möglicherweise nicht oder hört auf einem anderen Port.",
+            "helperVersionMismatch": "Die Version des lokalen Helpers passt nicht zum Widget. Installieren Sie das aktuelle vollständige Installer-ZIP, damit auch der Hintergrunddienst aktualisiert wird.",
             "configError": "Konfigurationsfehler: ",
             "configUnavailable": "Konfiguration nicht erreichbar: HTTP ",
             "saveFailed": "Speichern fehlgeschlagen: HTTP ",
@@ -1157,6 +1293,8 @@ PlasmoidItem {
             "refreshBlock": "Diesen Block aktualisieren",
             "refreshBlockFailed": "Block-Aktualisierung fehlgeschlagen: HTTP ",
             "refreshBlockRunning": "Eine andere Aktualisierung läuft bereits. Dieser Block wird gleich aktualisiert.",
+            "refreshAlreadyRunning": "Eine andere Aktualisierung läuft bereits. Neue Daten erscheinen, sobald sie beendet ist.",
+            "refreshJobFailed": "Die Aktualisierung ist fehlgeschlagen. Die bisherigen Daten bleiben sichtbar.",
             "requestTimedOut": "Zeitüberschreitung: Der lokale Hintergrunddienst hat nicht rechtzeitig geantwortet.",
             "panelSettings": "Panel-Darstellung",
             "panelMode": "Darstellung in einem Panel",
@@ -1243,10 +1381,272 @@ PlasmoidItem {
             "copyCommand": "Befehl kopieren",
             "copied": "Kopiert",
             "openHomepage": "Projektseite",
-            "retryConnection": "Erneut verbinden"
+            "retryConnection": "Erneut verbinden",
+            "feedStale": "zwischengespeichert",
+            "feedPaused": "pausiert",
+            "feedLastOk": "letzte erfolgreiche Aktualisierung:",
+            "feedNeverOk": "noch nie erfolgreich aktualisiert",
+            "newsSourcesOk": "Alle Quellen aktuell",
+            "newsShowDetails": "Details je Quelle anzeigen",
+            "newsHideDetails": "Details ausblenden",
+            "newsRetryNow": "Jetzt erneut versuchen",
+            "justNow": "gerade eben",
+            "minutesAgoShort": "Min.",
+            "hoursAgoShort": "Std.",
+            "daysAgoShort": "Tg.",
+            "newBadge": "neu",
+            "offlineNotice": "Keine Netzwerkverbindung. Es werden die zuletzt gespeicherten Daten angezeigt.",
+            "warnIncomplete": "Warnstatus unvollständig",
+            "warnCachedItem": "zwischengespeicherte Warnung",
+            "weatherCached": "zwischengespeichert",
+            "prayerCached": "zwischengespeicherte Zeiten",
+            "prayerOutdated": "Diese Zeiten sind nicht von heute",
+            "refreshRunning": "Wird aktualisiert…",
+            "refreshTookLong": "Die Aktualisierung läuft im Hintergrund weiter.",
+            "sourceProblem": "Quellenproblem",
+    })
+
+    function t(key) {
+        var dict = root.isEnglish() ? root.i18nEn : root.i18nDe
+        var value = dict[key]
+        return (value === undefined) ? key : value
+    }
+
+    // ---- News source health (v2.1.0) ---------------------------------------
+    // The helper now classifies every feed failure into a concrete cause and
+    // ships a short summary alongside the data. The UI reads that instead of
+    // rendering raw exception class names.
+
+    property bool newsDetailsOpen: false
+    property bool newsStatusOpen: false
+
+    function newsStatus() {
+        var s = root.rssData ? root.rssData.news_status : null
+        return (s && typeof s === "object") ? s : null
+    }
+
+    function newsHasProblem() {
+        var s = root.newsStatus()
+        return Boolean(s && Number(s.fail_count) > 0)
+    }
+
+    function newsStatusSeverity() {
+        var s = root.newsStatus()
+        return s ? String(s.severity || "ok") : "ok"
+    }
+
+    function newsStatusColor() {
+        // A partial outage with cached headlines still on screen is a notice,
+        // not an emergency. Only a total blackout earns the negative colour.
+        return root.newsStatusSeverity() === "error"
+               ? Kirigami.Theme.negativeTextColor
+               : Kirigami.Theme.neutralTextColor
+    }
+
+    function newsStatusSummary() {
+        var s = root.newsStatus()
+        return s ? String(s.summary || "") : ""
+    }
+
+    function newsStatusHint() {
+        var s = root.newsStatus()
+        return s ? String(s.hint || "") : ""
+    }
+
+    function feedIsOk(feed) {
+        // Feeds written by an older helper carry no "ok" flag at all. Treat a
+        // missing flag as healthy so a stale cache never lights up in red.
+        return !feed || feed.ok === undefined || feed.ok === true
+    }
+
+    function feedErrorMessage(feed) {
+        if (!feed || !feed.error) {
+            return ""
         }
-        var dict = root.isEnglish() ? en : de
-        return dict[key] || key
+        return String(feed.error.message || "")
+    }
+
+    function feedIsStale(feed) {
+        return Boolean(feed && feed.stale === true && (feed.items || []).length > 0)
+    }
+
+    // Compact relative age, e.g. "3 Min.", "2 Std.", "4 Tg.".
+    function relativeAge(epochSeconds) {
+        var epoch = Number(epochSeconds)
+        if (!isFinite(epoch) || epoch <= 0) {
+            return ""
+        }
+        var deltaSeconds = Math.floor(root.nowTick / 1000) - epoch
+        if (deltaSeconds < 0) {
+            // Clock skew between the publisher and this machine: treat a
+            // slightly future timestamp as "now" rather than showing nonsense.
+            deltaSeconds = 0
+        }
+        if (deltaSeconds < 90) {
+            return root.t("justNow")
+        }
+        var minutes = Math.round(deltaSeconds / 60)
+        if (minutes < 60) {
+            return minutes + " " + root.t("minutesAgoShort")
+        }
+        var hours = Math.round(minutes / 60)
+        if (hours < 24) {
+            return hours + " " + root.t("hoursAgoShort")
+        }
+        return Math.round(hours / 24) + " " + root.t("daysAgoShort")
+    }
+
+    function feedLastOkText(feed) {
+        if (!feed) {
+            return ""
+        }
+        var age = root.relativeAge(feed.last_ok)
+        if (!age) {
+            return root.t("feedNeverOk")
+        }
+        return root.t("feedLastOk") + " " + age
+    }
+
+    function headlineAgeText(entry) {
+        return (entry && entry.published) ? root.relativeAge(entry.published) : ""
+    }
+
+    // Stateless visual age scale for the timestamp at the right of each RSS
+    // headline. It deliberately does not track read/unread state.
+    function headlineAgeSeconds(entry) {
+        if (!entry || !entry.published) {
+            return -1
+        }
+        var ageSeconds = Math.floor(root.nowTick / 1000) - Number(entry.published)
+        return Math.max(0, ageSeconds)
+    }
+
+    function newsAgeWindowMinutesValue() {
+        return root.clampInt(root.newsAgeColorWindowMinutes, 120, 1, 1440)
+    }
+
+    function newsAgeColorFromSetting(value, fallbackColor) {
+        if (!root.validHexColor(value)) {
+            return fallbackColor
+        }
+        var hex = root.normalizedHexColor(value)
+        return Qt.rgba(parseInt(hex.slice(1, 3), 16) / 255.0,
+                       parseInt(hex.slice(3, 5), 16) / 255.0,
+                       parseInt(hex.slice(5, 7), 16) / 255.0,
+                       1.0)
+    }
+
+    function mixColors(fromColor, toColor, ratio) {
+        var t = Math.max(0.0, Math.min(1.0, Number(ratio)))
+        return Qt.rgba(fromColor.r + (toColor.r - fromColor.r) * t,
+                       fromColor.g + (toColor.g - fromColor.g) * t,
+                       fromColor.b + (toColor.b - fromColor.b) * t,
+                       fromColor.a + (toColor.a - fromColor.a) * t)
+    }
+
+    function newsAgeScaleColor(ratio) {
+        var newest = root.newsAgeColorFromSetting(root.newsAgeRecentColor, root.appHighlightColor)
+        var older = root.newsAgeColorFromSetting(root.newsAgeOlderColor, Kirigami.Theme.textColor)
+        return root.mixColors(newest, older, ratio)
+    }
+
+    function headlineAgeRatio(entry) {
+        var seconds = root.headlineAgeSeconds(entry)
+        if (seconds < 0) {
+            return 1.0
+        }
+        return Math.max(0.0, Math.min(1.0, seconds / (root.newsAgeWindowMinutesValue() * 60.0)))
+    }
+
+    function headlineAgeColor(entry) {
+        if (!root.newsAgeColorEnabled) {
+            return Kirigami.Theme.textColor
+        }
+        return root.newsAgeScaleColor(root.headlineAgeRatio(entry))
+    }
+
+    function headlineAgeOpacity(entry) {
+        if (!root.newsAgeColorEnabled) {
+            return 0.58
+        }
+        return 1.0 - (0.45 * root.headlineAgeRatio(entry))
+    }
+
+    function headlineAgeBold(entry) {
+        return Boolean(root.newsAgeColorEnabled && root.headlineAgeRatio(entry) <= 0.15)
+    }
+
+    // ---- Warning / weather / prayer freshness (v2.1.1) ---------------------
+    // These three blocks each reported errors in the cache that the UI never
+    // read. For the warnings block that was actively unsafe: a source that
+    // could not be checked rendered as an all-clear.
+
+    function ninaBlock() {
+        var n = root.rssData ? root.rssData.nina : null
+        return (n && typeof n === "object") ? n : null
+    }
+
+    function ninaIncomplete() {
+        var n = root.ninaBlock()
+        // "complete" is absent in caches written before v2.1.1; treat missing
+        // as complete so an old cache does not raise a permanent false alarm.
+        return Boolean(n && n.complete === false)
+    }
+
+    function ninaNotice() {
+        var n = root.ninaBlock()
+        return (n && n.notice) ? String(n.notice) : ""
+    }
+
+    function warningIsStale(warning) {
+        return Boolean(warning && warning.stale === true)
+    }
+
+    function warningStaleText(warning) {
+        if (!root.warningIsStale(warning)) {
+            return ""
+        }
+        var age = root.relativeAge(warning.last_ok)
+        return age ? (root.t("warnCachedItem") + " · " + age) : root.t("warnCachedItem")
+    }
+
+    function weatherIsStale(w) {
+        return Boolean(w && w.stale === true)
+    }
+
+    function weatherStaleText(w) {
+        if (!root.weatherIsStale(w)) {
+            return ""
+        }
+        var age = root.relativeAge(w.last_ok)
+        return age ? (root.t("weatherCached") + " · " + age) : root.t("weatherCached")
+    }
+
+    function prayerBlock() {
+        var p = root.rssData ? root.rssData.prayer : null
+        return (p && typeof p === "object") ? p : null
+    }
+
+    function prayerIsStale() {
+        var p = root.prayerBlock()
+        return Boolean(p && p.stale === true)
+    }
+
+    function prayerIsOutdated() {
+        var p = root.prayerBlock()
+        return Boolean(p && p.outdated === true)
+    }
+
+    function prayerStaleText() {
+        var p = root.prayerBlock()
+        if (!p || p.stale !== true) {
+            return ""
+        }
+        if (p.outdated === true) {
+            return root.t("prayerOutdated")
+        }
+        var age = root.relativeAge(p.last_ok)
+        return age ? (root.t("prayerCached") + " · " + age) : root.t("prayerCached")
     }
 
     function normalizedHexColor(value) {
@@ -1351,6 +1751,7 @@ PlasmoidItem {
         var escaped = root.htmlEscape(value)
         var known = [
             "open-meteo.com/en/docs",
+            "openweathermap.org",
             "twelvedata.com/docs",
             "twelvedata.com",
             "finnhub.io/register",
@@ -1960,6 +2361,7 @@ PlasmoidItem {
 
         root.feedsText = feeds.join("\n")
         root.weatherText = weather.join("\n")
+        root.openWeatherApiKey = data.weather && data.weather.openweather_api_key ? String(data.weather.openweather_api_key) : ""
         root.ninaText = nina.join("\n")
         root.marketsText = markets.join("\n")
         root.stocksText = stocks.join("\n")
@@ -1992,7 +2394,7 @@ PlasmoidItem {
             root.uiHighlightColor = data.ui.highlight_color ? String(data.ui.highlight_color) : ""
             root.desktopBackgroundMode = root.cleanDesktopBackgroundMode(data.ui.desktop_background_mode || "default")
             root.desktopBackgroundColor = data.ui.desktop_background_color ? String(data.ui.desktop_background_color) : ""
-            root.uiLanguage = data.ui.language ? String(data.ui.language) : "de"
+            root.uiLanguage = data.ui.language ? String(data.ui.language) : "auto"
             root.newsFontFamily = data.ui.news_font_family ? String(data.ui.news_font_family) : ""
             root.newsFontSizeOffset = String(data.ui.news_font_size_offset !== undefined ? data.ui.news_font_size_offset : 0)
             root.newsFontSize = String(data.ui.news_font_size !== undefined ? data.ui.news_font_size : (root.clampInt(root.uiFontSize, 16, 12, 34) + root.clampInt(root.newsFontSizeOffset, 0, -3, 6)))
@@ -2011,6 +2413,11 @@ PlasmoidItem {
             root.prayerNowAfterMinutes = String(data.ui.prayer_now_after_minutes !== undefined ? data.ui.prayer_now_after_minutes : 1)
             root.separatorStyle = root.cleanSeparatorStyle(data.ui.separator_style || "subtle")
             root.newsLinksClickable = data.ui.news_links_clickable !== false
+            root.showNewsAge = data.ui.news_show_age !== false
+            root.newsAgeColorEnabled = data.ui.news_age_color_enabled !== false
+            root.newsAgeColorWindowMinutes = String(data.ui.news_age_color_minutes !== undefined ? data.ui.news_age_color_minutes : 120)
+            root.newsAgeRecentColor = data.ui.news_age_recent_color ? String(data.ui.news_age_recent_color) : ""
+            root.newsAgeOlderColor = data.ui.news_age_older_color ? String(data.ui.news_age_older_color) : ""
             root.titleStyle = root.cleanTitleStyle(data.ui.title_style || "accent")
             // New in v1.51: optional custom title. Stored as a single string
             // shared between languages, per the user's choice in the picker.
@@ -2020,7 +2427,7 @@ PlasmoidItem {
             root.uiHighlightColor = ""
             root.desktopBackgroundMode = "default"
             root.desktopBackgroundColor = ""
-            root.uiLanguage = "de"
+            root.uiLanguage = "auto"
             root.newsFontFamily = ""
             root.newsFontSizeOffset = "0"
             root.newsFontSize = String(root.clampInt(root.uiFontSize, 16, 12, 34))
@@ -2039,13 +2446,18 @@ PlasmoidItem {
             root.prayerNowAfterMinutes = "1"
             root.separatorStyle = "subtle"
             root.newsLinksClickable = true
+            root.showNewsAge = true
+            root.newsAgeColorEnabled = true
+            root.newsAgeColorWindowMinutes = "120"
+            root.newsAgeRecentColor = ""
+            root.newsAgeOlderColor = ""
             root.titleStyle = "accent"
             root.customTitle = ""
         } else {
             root.uiHighlightColor = ""
             root.desktopBackgroundMode = "default"
             root.desktopBackgroundColor = ""
-            root.uiLanguage = "de"
+            root.uiLanguage = "auto"
             root.newsFontFamily = ""
             root.newsFontSizeOffset = "0"
             root.newsFontSize = String(root.clampInt(root.uiFontSize, 16, 12, 34))
@@ -2064,6 +2476,11 @@ PlasmoidItem {
             root.prayerNowAfterMinutes = "1"
             root.separatorStyle = "subtle"
             root.newsLinksClickable = true
+            root.showNewsAge = true
+            root.newsAgeColorEnabled = true
+            root.newsAgeColorWindowMinutes = "120"
+            root.newsAgeRecentColor = ""
+            root.newsAgeOlderColor = ""
             root.titleStyle = "accent"
             root.customTitle = ""
         }
@@ -2203,6 +2620,9 @@ PlasmoidItem {
         var payload = {
             "feeds": root.parseConfigText(root.feedsText, "feed"),
             "weather_locations": root.parseConfigText(root.weatherText, "weather"),
+            "weather": {
+                "openweather_api_key": String(root.openWeatherApiKey || "").trim()
+            },
             "nina_codes": root.parseConfigText(root.ninaText, "nina"),
             "markets": {
                 "currencies": root.parseCurrenciesText(root.currenciesText),
@@ -2233,7 +2653,7 @@ PlasmoidItem {
                 "highlight_color": root.validHexColor(root.uiHighlightColor) ? root.normalizedHexColor(root.uiHighlightColor) : "",
                 "desktop_background_mode": root.cleanDesktopBackgroundMode(root.desktopBackgroundMode),
                 "desktop_background_color": root.validHexColor(root.desktopBackgroundColor) ? root.normalizedHexColor(root.desktopBackgroundColor) : "",
-                "language": root.uiLanguage === "en" ? "en" : "de",
+                "language": root.uiLanguage === "de" ? "de" : (root.uiLanguage === "en" ? "en" : "auto"),
                 "news_font_family": root.normalizedFontFamily(root.newsFontFamily),
                 "news_font_size": clampedNewsSize,
                 "news_font_size_offset": clampedNewsSize - clampedFontSize,
@@ -2251,6 +2671,11 @@ PlasmoidItem {
                 "prayer_now_after_minutes": root.clampInt(root.prayerNowAfterMinutes, 1, 1, 30),
                 "separator_style": root.cleanSeparatorStyle(root.separatorStyle),
                 "news_links_clickable": root.newsLinksClickable,
+                "news_show_age": root.showNewsAge,
+                "news_age_color_enabled": root.newsAgeColorEnabled,
+                "news_age_color_minutes": root.newsAgeWindowMinutesValue(),
+                "news_age_recent_color": root.validHexColor(root.newsAgeRecentColor) ? root.normalizedHexColor(root.newsAgeRecentColor) : "",
+                "news_age_older_color": root.validHexColor(root.newsAgeOlderColor) ? root.normalizedHexColor(root.newsAgeOlderColor) : "",
                 "title_style": root.cleanTitleStyle(root.titleStyle),
                 "custom_title": String(root.customTitle || "").trim()
             },
@@ -2330,41 +2755,62 @@ PlasmoidItem {
         root.blockRefreshing = clean
     }
 
+    function refreshResponse(xhr) {
+        try {
+            var parsed = JSON.parse(xhr.responseText || "{}")
+            return (parsed && typeof parsed === "object") ? parsed : ({})
+        } catch (e) {
+            return ({})
+        }
+    }
+
+    function clearRefreshUiState() {
+        refreshPollTimer.stop()
+        root.refreshing = false
+        if (root.refreshPollBlock) {
+            root.setBlockRefreshing(root.refreshPollBlock, false)
+        }
+        root.refreshPollBlock = ""
+        root.refreshJobActive = false
+    }
+
     function triggerBlockRefresh(id) {
-        if (!root.canRefreshBlock(id)) {
+        if (!root.canRefreshBlock(id) || root.refreshJobActive) {
             return
         }
+        root.refreshJobActive = true
         root.setBlockRefreshing(id, true)
 
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr, { block: id })
+        root.prepareXhr(xhr, { block: id, clearRefreshJob: true })
 
         xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4) {
-                root.setBlockRefreshing(id, false)
-
-                if (xhr.status === 200) {
-                    var alreadyRunning = false
-                    try {
-                        var resp = JSON.parse(xhr.responseText || "{}")
-                        alreadyRunning = resp && resp.already_running === true
-                    } catch (e) {
-                        alreadyRunning = false
-                    }
-                    if (alreadyRunning) {
-                        root.errorText = root.t("refreshBlockRunning")
-                        blockRefreshRetryTimer.restart()
-                    } else {
-                        root.errorText = ""
-                        root.loadCache()
-                    }
+            if (xhr.readyState !== 4) {
+                return
+            }
+            if (xhr.status === 200) {
+                var resp = root.refreshResponse(xhr)
+                if (resp.started === true) {
+                    root.errorText = ""
+                    root.beginRefreshPolling(id)
                 } else {
-                    root.errorText = root.t("refreshBlockFailed") + xhr.status
-                    if (xhr.status === 0) {
-                        root.helperOk = false
-                        if (!root.portDiscoveryInProgress) {
-                            root.discoverLocalHelperPort()
-                        }
+                    root.setBlockRefreshing(id, false)
+                    root.refreshJobActive = false
+                    if (resp.already_running === true) {
+                        root.errorText = root.t("refreshAlreadyRunning")
+                        root.loadCache()
+                    } else {
+                        root.errorText = root.t("refreshJobFailed") + (resp.error ? " " + String(resp.error) : "")
+                    }
+                }
+            } else {
+                root.setBlockRefreshing(id, false)
+                root.refreshJobActive = false
+                root.errorText = root.t("refreshBlockFailed") + xhr.status
+                if (xhr.status === 0) {
+                    root.helperOk = false
+                    if (!root.portDiscoveryInProgress) {
+                        root.discoverLocalHelperPort()
                     }
                 }
             }
@@ -2376,41 +2822,42 @@ PlasmoidItem {
     }
 
     function triggerRefresh() {
+        if (root.refreshJobActive) {
+            return
+        }
+        root.refreshJobActive = true
         root.refreshing = true
 
         var xhr = new XMLHttpRequest()
-        root.prepareXhr(xhr)
+        root.prepareXhr(xhr, { clearRefreshJob: true })
 
         xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4) {
-                root.refreshing = false
-
-                if (xhr.status === 200) {
-                    // The server now answers /refresh with `{ok:true, already_running:true}`
-                    // when a refresh from a previous click / the timer is still in flight.
-                    // In that case the cache won't be updated yet, so loading it
-                    // immediately would just re-display the stale data. Wait a short
-                    // moment and try again; the running refresh has a 120 s server-side
-                    // timeout, but the typical real run completes in 5–15 s.
-                    var alreadyRunning = false
-                    try {
-                        var resp = JSON.parse(xhr.responseText || "{}")
-                        alreadyRunning = resp && resp.already_running === true
-                    } catch (e) {
-                        // Older servers don't return JSON for /refresh; treat as normal.
-                    }
-                    if (alreadyRunning) {
-                        refreshRetryTimer.restart()
-                    } else {
-                        root.loadCache()
-                    }
+            if (xhr.readyState !== 4) {
+                return
+            }
+            if (xhr.status === 200) {
+                var resp = root.refreshResponse(xhr)
+                if (resp.started === true) {
+                    root.errorText = ""
+                    root.beginRefreshPolling("")
                 } else {
-                    root.errorText = root.t("refreshFailed") + xhr.status
-                    if (xhr.status === 0) {
-                        root.helperOk = false
-                        if (!root.portDiscoveryInProgress) {
-                            root.discoverLocalHelperPort()
-                        }
+                    root.refreshing = false
+                    root.refreshJobActive = false
+                    if (resp.already_running === true) {
+                        root.errorText = root.t("refreshAlreadyRunning")
+                        root.loadCache()
+                    } else {
+                        root.errorText = root.t("refreshJobFailed") + (resp.error ? " " + String(resp.error) : "")
+                    }
+                }
+            } else {
+                root.refreshing = false
+                root.refreshJobActive = false
+                root.errorText = root.t("refreshFailed") + xhr.status
+                if (xhr.status === 0) {
+                    root.helperOk = false
+                    if (!root.portDiscoveryInProgress) {
+                        root.discoverLocalHelperPort()
                     }
                 }
             }
@@ -2421,22 +2868,87 @@ PlasmoidItem {
         xhr.send("{}")
     }
 
-    // Fires once after triggerRefresh() saw `already_running:true`. Loads the
-    // cache after the in-flight refresh has had time to finish writing rss.json.
-    // Five seconds is enough for the common case; if the running refresh takes
-    // longer the next regular auto-fetch timer will pick the data up anyway.
-    Timer {
-        id: refreshRetryTimer
-        interval: 5000
-        repeat: false
-        onTriggered: root.loadCache()
+    // ---- Refresh completion polling (v2.1.2) --------------------------------
+    // The server returns the job result separately from HTTP transport status.
+    // Keep exactly one client-side refresh in flight and honour last_ok, error
+    // and already_running instead of treating every completed poll as success.
+
+    property string refreshPollBlock: ""
+    property int refreshPollAttempts: 0
+    readonly property int refreshPollMaxAttempts: 90
+
+    function beginRefreshPolling(blockId) {
+        root.refreshPollBlock = blockId || ""
+        root.refreshPollAttempts = 0
+        refreshPollTimer.restart()
+    }
+
+    function endRefreshPolling(message) {
+        root.clearRefreshUiState()
+        root.errorText = message ? String(message) : ""
+        root.loadCache()
+    }
+
+    function pollRefreshStatus() {
+        root.refreshPollAttempts += 1
+        if (root.refreshPollAttempts > root.refreshPollMaxAttempts) {
+            // Stop watching without inventing a failure.  The server may still
+            // be working and the normal cache poll will pick up its result.
+            root.endRefreshPolling(root.t("refreshTookLong"))
+            return
+        }
+
+        var xhr = new XMLHttpRequest()
+        try {
+            xhr.timeout = 5000
+        } catch (e) {
+            // Older QML runtimes without XMLHttpRequest.timeout.
+        }
+        xhr.ontimeout = function() {
+            refreshPollTimer.restart()
+        }
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) {
+                return
+            }
+            if (xhr.status === 200) {
+                var resp = root.refreshResponse(xhr)
+                if (resp.running === true) {
+                    refreshPollTimer.restart()
+                    return
+                }
+                if (resp.already_running === true) {
+                    root.endRefreshPolling(root.t("refreshAlreadyRunning"))
+                    return
+                }
+                if (resp.last_ok === false) {
+                    var detail = resp.error ? " " + String(resp.error) : ""
+                    root.endRefreshPolling(root.t("refreshJobFailed") + detail)
+                    return
+                }
+                root.endRefreshPolling("")
+            } else if (xhr.status === 0) {
+                // Helper went away mid-refresh.
+                root.clearRefreshUiState()
+                root.helperOk = false
+                if (!root.portDiscoveryInProgress) {
+                    root.discoverLocalHelperPort()
+                }
+            } else {
+                // An older helper without /refresh-status: fall back to a
+                // delayed cache reload rather than polling forever.
+                root.endRefreshPolling("")
+            }
+        }
+        xhr.open("GET", root.baseUrl + "/refresh-status?t=" + Date.now())
+        xhr.send()
     }
 
     Timer {
-        id: blockRefreshRetryTimer
-        interval: 5000
+        id: refreshPollTimer
+        interval: 1500
         repeat: false
-        onTriggered: root.loadCache()
+        onTriggered: root.pollRefreshStatus()
     }
 
     // ---- Reset everything (v1.51) ------------------------------------------
@@ -2737,20 +3249,109 @@ PlasmoidItem {
         xhr.send(JSON.stringify({"twelve_data_api_key": twelveKey, "finnhub_api_key": finnhubKey}))
     }
 
+    function checkOpenWeatherApi() {
+        var key = String(root.openWeatherApiKey || "").trim()
+        if (key.length === 0) {
+            root.weatherApiChecking = false
+            root.weatherApiStatusOk = false
+            root.weatherApiStatusMessage = root.t("weatherApiMissing")
+            return
+        }
+
+        var lat = 52.52
+        var lon = 13.405
+        try {
+            var places = root.parseConfigText(root.weatherText, "weather")
+            if (places && places.length > 0) {
+                lat = Number(places[0].lat)
+                lon = Number(places[0].lon)
+            }
+        } catch (e) {
+            // The API-key test itself does not depend on a valid locations list.
+        }
+
+        root.weatherApiChecking = true
+        root.weatherApiStatusOk = true
+        root.weatherApiStatusMessage = root.t("weatherApiChecking")
+
+        var xhr = new XMLHttpRequest()
+        root.prepareXhr(xhr, { purpose: "status", clearWeatherApiChecking: true })
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) return
+            root.weatherApiChecking = false
+            if (xhr.status !== 200) {
+                root.weatherApiStatusOk = false
+                root.weatherApiStatusMessage = root.t("weatherApiFailed") + ": HTTP " + xhr.status
+                if (xhr.status === 0 && !root.portDiscoveryInProgress) {
+                    root.helperOk = false
+                    root.discoverLocalHelperPort()
+                }
+                return
+            }
+            try {
+                var data = JSON.parse(xhr.responseText || "{}")
+                var reason = String(data.reason || "")
+                if (data.ok === true) {
+                    root.weatherApiStatusOk = true
+                    root.weatherApiStatusMessage = root.t("weatherApiOk")
+                } else {
+                    root.weatherApiStatusOk = false
+                    if (reason === "missing") {
+                        root.weatherApiStatusMessage = root.t("weatherApiMissing")
+                    } else if (reason === "unauthorized") {
+                        root.weatherApiStatusMessage = root.t("weatherApiUnauthorized")
+                    } else if (reason === "rate_limited") {
+                        root.weatherApiStatusMessage = root.t("weatherApiRateLimited")
+                    } else {
+                        var detail = String(data.message || "").trim()
+                        root.weatherApiStatusMessage = root.t("weatherApiFailed") + (detail.length > 0 ? " – " + detail : "")
+                    }
+                }
+            } catch (e) {
+                root.weatherApiStatusOk = false
+                root.weatherApiStatusMessage = root.t("weatherApiFailed") + " – parse"
+            }
+        }
+        xhr.open("POST", root.baseUrl + "/check-weather-api")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send(JSON.stringify({
+            "openweather_api_key": key,
+            "lat": lat,
+            "lon": lon,
+            "language": root.effectiveUiLanguage()
+        }))
+    }
+
     Component.onCompleted: {
         // Load config first so uiLanguage is set before the cache result
         // arrives; loadCache() is chained inside loadConfig() to avoid a brief
         // language flip if the cache response wins the race.
-        root.loadConfig()
+        root.discoverLocalHelperPort()
     }
 
     Timer {
-        // Update nowTick every 10 s so weather local-time clocks drift by at
-        // most 10 s rather than a full minute.  Overhead is negligible.
-        interval: 10000
+        // nowTick drives the weather local-time clocks, the prayer-time
+        // upcoming/now highlighting and the relative headline ages. All of
+        // those are only visible while the popup is open, so ticking every
+        // 10 s with the popup collapsed just woke the whole binding graph for
+        // nothing. Collapsed, one minute is plenty to keep the panel tooltip
+        // and the warning badge honest.
+        interval: root.expanded ? 10000 : 60000
         running: true
         repeat: true
         onTriggered: root.nowTick = Date.now()
+    }
+
+    onExpandedChanged: {
+        if (root.expanded) {
+            // Re-sync immediately on open so nothing shows a value that is up
+            // to a minute stale for the first tick.
+            root.nowTick = Date.now()
+        } else {
+            // Collapsing is also the natural point to fold the diagnostics
+            // list back up, so reopening starts from the summary again.
+            root.newsDetailsOpen = false
+        }
     }
 
     // Keep the visible dashboard in sync with the cache file.  The real
@@ -2761,7 +3362,11 @@ PlasmoidItem {
     // showing stale data until the user opened settings.
     Timer {
         id: displayCacheReloadTimer
-        interval: 30000
+        // 30 s while the popup is open so a background refresh appears
+        // promptly; 2 min while collapsed, where the only consumers are the
+        // panel tooltip and the warning badge. This is a local HTTP round trip
+        // plus a JSON parse of the whole cache, so it is not free.
+        interval: root.expanded ? 30000 : 120000
         running: true
         repeat: true
         onTriggered: {
@@ -2988,20 +3593,29 @@ PlasmoidItem {
 
                     QQC2.ToolButton {
                         id: topRefreshButton
-                        icon.name: "view-refresh"
+                        property bool busy: root.refreshing
+                        icon.name: busy ? "" : "view-refresh"
                         display: QQC2.AbstractButton.IconOnly
                         enabled: true
-                        opacity: root.refreshing ? 0.68 : 0.96
+                        opacity: busy ? 1.0 : (root.refreshJobActive ? 0.38 : 0.96)
                         implicitWidth: Kirigami.Units.gridUnit * 1.45
                         implicitHeight: Kirigami.Units.gridUnit * 1.45
                         icon.width: Math.max(14, root.smallSize + 2)
                         icon.height: icon.width
                         icon.color: root.appHighlightColor
+
+                        QQC2.BusyIndicator {
+                            anchors.centerIn: parent
+                            width: Math.max(18, root.smallSize + 6)
+                            height: width
+                            running: topRefreshButton.busy
+                            visible: running
+                        }
                         QQC2.ToolTip.visible: hovered
                         QQC2.ToolTip.delay: 600
-                        QQC2.ToolTip.text: root.refreshing ? root.t("loading") : root.t("refresh")
+                        QQC2.ToolTip.text: root.refreshJobActive ? root.t("loading") : root.t("refresh")
                         onClicked: {
-                            if (!root.refreshing) {
+                            if (!root.refreshJobActive) {
                                 root.triggerRefresh()
                             }
                         }
@@ -3032,6 +3646,17 @@ PlasmoidItem {
                     Layout.fillWidth: true
                     text: root.rssData.updated ? (root.t("updated") + root.rssData.updated) : root.t("noCache")
                     opacity: 0.72
+                    font.pixelSize: root.smallSize
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                }
+
+                PlasmaComponents3.Label {
+                    visible: root.helperVersionMismatch
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: root.t("helperVersionMismatch") + " (" + root.helperVersion + " → " + root.appVersion + ")"
+                    color: Kirigami.Theme.neutralTextColor
                     font.pixelSize: root.smallSize
                     wrapMode: Text.WordWrap
                     elide: Text.ElideNone
@@ -3208,10 +3833,10 @@ PlasmoidItem {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
                                         Layout.maximumWidth: 260
-                                        model: ["Deutsch", "English"]
-                                        currentIndex: root.uiLanguage === "en" ? 1 : 0
+                                        model: [root.t("languageAuto"), "Deutsch", "English"]
+                                        currentIndex: root.uiLanguage === "de" ? 1 : (root.uiLanguage === "en" ? 2 : 0)
                                         font.pixelSize: root.smallSize
-                                        onActivated: function(index) { root.uiLanguage = index === 1 ? "en" : "de" }
+                                        onActivated: function(index) { root.uiLanguage = index === 1 ? "de" : (index === 2 ? "en" : "auto") }
                                     }
                                 }
 
@@ -3842,7 +4467,7 @@ PlasmoidItem {
                                         Layout.minimumWidth: 0
                                         text: root.newsFontFamily
                                         font.pixelSize: root.smallSize
-                                        placeholderText: root.uiLanguage === "en" ? "empty = Plasma default, e.g. Noto Sans Mono, Atkinson Hyperlegible, Inter" : "leer = Plasma-Standard, z. B. Noto Sans Mono, Atkinson Hyperlegible, Inter"
+                                        placeholderText: root.isEnglish() ? "empty = Plasma default, e.g. Noto Sans Mono, Atkinson Hyperlegible, Inter" : "leer = Plasma-Standard, z. B. Noto Sans Mono, Atkinson Hyperlegible, Inter"
                                         onTextChanged: root.newsFontFamily = text
                                     }
 
@@ -3900,6 +4525,182 @@ PlasmoidItem {
                                     font.pixelSize: root.smallSize
                                     wrapMode: Text.WordWrap
                                     elide: Text.ElideNone
+                                }
+
+                                QQC2.CheckBox {
+                                    text: root.t("showNewsAge")
+                                    checked: root.showNewsAge
+                                    font.pixelSize: root.smallSize
+                                    onToggled: root.showNewsAge = checked
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("showNewsAgeHelp")
+                                    opacity: 0.72
+                                    font.pixelSize: root.smallSize
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+
+                                QQC2.CheckBox {
+                                    text: root.t("newsAgeColorEnabled")
+                                    checked: root.newsAgeColorEnabled
+                                    enabled: root.showNewsAge
+                                    font.pixelSize: root.smallSize
+                                    onToggled: root.newsAgeColorEnabled = checked
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("newsAgeColorHelp")
+                                    opacity: root.showNewsAge ? 0.72 : 0.45
+                                    font.pixelSize: root.smallSize
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.largeSpacing
+                                    enabled: root.showNewsAge && root.newsAgeColorEnabled
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+
+                                        PlasmaComponents3.Label {
+                                            text: root.t("newsAgeColorWindow")
+                                            font.pixelSize: root.smallSize
+                                        }
+
+                                        QQC2.TextField {
+                                            Layout.preferredWidth: 110
+                                            text: root.newsAgeColorWindowMinutes
+                                            placeholderText: "120"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            font.pixelSize: root.smallSize
+                                            onTextEdited: root.newsAgeColorWindowMinutes = text
+                                            onEditingFinished: root.newsAgeColorWindowMinutes = String(root.newsAgeWindowMinutesValue())
+                                        }
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("newsAgeColorWindowHelp")
+                                        opacity: 0.72
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    columns: root.width >= 680 ? 2 : 1
+                                    columnSpacing: Kirigami.Units.largeSpacing
+                                    rowSpacing: Kirigami.Units.smallSpacing
+                                    enabled: root.showNewsAge && root.newsAgeColorEnabled
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        PlasmaComponents3.Label { text: root.t("newsAgeRecentColor"); font.pixelSize: root.smallSize }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            QQC2.TextField {
+                                                Layout.fillWidth: true
+                                                text: root.newsAgeRecentColor
+                                                placeholderText: root.t("newsAgeColorPlaceholderRecent")
+                                                font.pixelSize: root.smallSize
+                                                onTextChanged: root.newsAgeRecentColor = text
+                                            }
+                                            Rectangle {
+                                                Layout.preferredWidth: 32
+                                                Layout.preferredHeight: 32
+                                                radius: 6
+                                                color: root.newsAgeColorFromSetting(root.newsAgeRecentColor, root.appHighlightColor)
+                                                border.width: 1
+                                                border.color: Kirigami.Theme.textColor
+                                                opacity: 0.95
+                                            }
+                                        }
+                                        PlasmaComponents3.Label {
+                                            visible: root.newsAgeRecentColor.length > 0 && !root.validHexColor(root.newsAgeRecentColor)
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("highlightHelp")
+                                            color: Kirigami.Theme.negativeTextColor
+                                            font.pixelSize: Math.max(9, root.smallSize - 1)
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        PlasmaComponents3.Label { text: root.t("newsAgeOlderColor"); font.pixelSize: root.smallSize }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            QQC2.TextField {
+                                                Layout.fillWidth: true
+                                                text: root.newsAgeOlderColor
+                                                placeholderText: root.t("newsAgeColorPlaceholderOlder")
+                                                font.pixelSize: root.smallSize
+                                                onTextChanged: root.newsAgeOlderColor = text
+                                            }
+                                            Rectangle {
+                                                Layout.preferredWidth: 32
+                                                Layout.preferredHeight: 32
+                                                radius: 6
+                                                color: root.newsAgeColorFromSetting(root.newsAgeOlderColor, Kirigami.Theme.textColor)
+                                                border.width: 1
+                                                border.color: Kirigami.Theme.textColor
+                                                opacity: 0.95
+                                            }
+                                        }
+                                        PlasmaComponents3.Label {
+                                            visible: root.newsAgeOlderColor.length > 0 && !root.validHexColor(root.newsAgeOlderColor)
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("highlightHelp")
+                                            color: Kirigami.Theme.negativeTextColor
+                                            font.pixelSize: Math.max(9, root.smallSize - 1)
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    enabled: root.showNewsAge && root.newsAgeColorEnabled
+                                    spacing: Kirigami.Units.largeSpacing
+
+                                    PlasmaComponents3.Label {
+                                        text: root.t("newsAgeColorPreview") + ":"
+                                        font.pixelSize: root.smallSize
+                                        opacity: 0.72
+                                    }
+                                    PlasmaComponents3.Label { text: root.t("newsAgeColorNow"); color: root.newsAgeScaleColor(0.0); font.bold: true; font.pixelSize: root.smallSize }
+                                    PlasmaComponents3.Label { text: "25 %"; color: root.newsAgeScaleColor(0.25); font.pixelSize: root.smallSize }
+                                    PlasmaComponents3.Label { text: "50 %"; color: root.newsAgeScaleColor(0.50); font.pixelSize: root.smallSize }
+                                    PlasmaComponents3.Label { text: "75 %"; color: root.newsAgeScaleColor(0.75); font.pixelSize: root.smallSize }
+                                    PlasmaComponents3.Label { text: root.t("newsAgeColorEnd"); color: root.newsAgeScaleColor(1.0); opacity: 0.58; font.pixelSize: root.smallSize }
+                                    Item { Layout.fillWidth: true }
+                                    QQC2.Button {
+                                        text: root.t("plasmaColor")
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        onClicked: {
+                                            root.newsAgeRecentColor = ""
+                                            root.newsAgeOlderColor = ""
+                                        }
+                                    }
                                 }
                             }
 
@@ -4193,7 +4994,8 @@ PlasmoidItem {
                                 PlasmaComponents3.Label {
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
-                                    text: root.t("weatherPlaces")
+                                    text: root.t("weatherSourceSettings")
+                                    font.bold: true
                                     font.pixelSize: root.smallSize
                                 }
 
@@ -4208,6 +5010,85 @@ PlasmoidItem {
                                     textFormat: Text.RichText
                                     linkColor: root.appHighlightColor
                                     onLinkActivated: function(link) { root.openExternalUrl(link) }
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("weatherApiKey")
+                                    font.pixelSize: root.smallSize
+                                }
+
+                                QQC2.TextField {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.openWeatherApiKey
+                                    echoMode: TextInput.Password
+                                    font.pixelSize: root.smallSize
+                                    placeholderText: "optional"
+                                    onTextChanged: {
+                                        root.openWeatherApiKey = text
+                                        root.weatherApiStatusMessage = ""
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    QQC2.Button {
+                                        text: root.weatherApiChecking ? root.t("loading") : root.t("checkWeatherApi")
+                                        icon.name: "network-connect"
+                                        enabled: !root.weatherApiChecking && root.helperOk && String(root.openWeatherApiKey || "").trim().length > 0
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                        onClicked: root.checkOpenWeatherApi()
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                Rectangle {
+                                    visible: root.weatherApiStatusMessage.length > 0
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: root.weatherApiStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                    border.width: 1
+                                    radius: 6
+                                    opacity: 0.98
+                                    implicitHeight: weatherApiStatusMessageLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                                    PlasmaComponents3.Label {
+                                        id: weatherApiStatusMessageLabel
+                                        anchors.fill: parent
+                                        anchors.margins: Kirigami.Units.largeSpacing
+                                        text: root.weatherApiStatusMessage
+                                        color: root.weatherApiStatusOk ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                        font.pixelSize: Math.max(9, root.smallSize - 2)
+                                    }
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.richDescription(root.t("weatherApiHelp"))
+                                    opacity: 0.72
+                                    font.pixelSize: root.smallSize
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                    textFormat: Text.RichText
+                                    linkColor: root.appHighlightColor
+                                    onLinkActivated: function(link) { root.openExternalUrl(link) }
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    Layout.topMargin: Kirigami.Units.smallSpacing
+                                    text: root.t("weatherPlaces")
+                                    font.pixelSize: root.smallSize
                                 }
 
                                 QQC2.ScrollView {
@@ -5200,22 +6081,46 @@ PlasmoidItem {
                                 elide: Text.ElideNone
                             }
 
+                            QQC2.ToolButton {
+                                id: weatherSourceInfoButton
+                                visible: Boolean(root.rssData.weather && root.rssData.weather.provider)
+                                icon.name: "help-about"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.82
+                                implicitHeight: Kirigami.Units.gridUnit * 0.82
+                                opacity: 0.58
+                                icon.width: Math.max(9, root.smallSize - 3)
+                                icon.height: icon.width
+                                icon.color: Kirigami.Theme.textColor
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.t("weatherSourceInfo")
+                                onClicked: weatherSourcePopup.open()
+                            }
 
                             QQC2.ToolButton {
                                 id: weatherBlockRefreshButton
-                                icon.name: "view-refresh"
+                                property bool busy: root.isBlockRefreshing("weather")
+                                icon.name: busy ? "" : "view-refresh"
                                 display: QQC2.AbstractButton.IconOnly
                                 implicitWidth: Kirigami.Units.gridUnit * 0.95
                                 implicitHeight: Kirigami.Units.gridUnit * 0.95
                                 enabled: true
-                                opacity: root.isBlockRefreshing("weather") ? 0.58 : 0.88
+                                opacity: busy ? 1.0 : (root.refreshJobActive ? 0.34 : 0.88)
                                 icon.width: Math.max(10, root.smallSize - 2)
                                 icon.height: icon.width
                                 icon.color: root.appHighlightColor
+
+                                QQC2.BusyIndicator {
+                                    anchors.centerIn: parent
+                                    width: Math.max(14, root.smallSize + 1)
+                                    height: width
+                                    running: weatherBlockRefreshButton.busy
+                                    visible: running
+                                }
                                 QQC2.ToolTip.visible: hovered
-                                QQC2.ToolTip.text: root.isBlockRefreshing("weather") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("weather"))
+                                QQC2.ToolTip.text: root.refreshJobActive ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("weather"))
                                 onClicked: {
-                                    if (!root.refreshing && !root.isBlockRefreshing("weather")) {
+                                    if (!root.refreshJobActive) {
                                         root.triggerBlockRefresh("weather")
                                     }
                                 }
@@ -5272,7 +6177,27 @@ PlasmoidItem {
                                         visible: text.length > 0
                                         font.pixelSize: root.bodySize
                                         font.bold: true
+                                        // Fade a cached value so it reads as
+                                        // provisional rather than current.
+                                        opacity: root.weatherIsStale(w) ? 0.6 : 1.0
                                         color: root.weatherTempColor(w.temperature)
+                                    }
+
+                                    // The backend already kept the last good
+                                    // reading for a failed location; without
+                                    // this label the user could not tell it
+                                    // apart from a fresh one.
+                                    PlasmaComponents3.Label {
+                                        visible: root.weatherIsStale(w)
+                                        text: root.weatherStaleText(w)
+                                        textFormat: Text.PlainText
+                                        color: Kirigami.Theme.neutralTextColor
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        elide: Text.ElideRight
+
+                                        QQC2.ToolTip.visible: weatherStaleHover.hovered
+                                        QQC2.ToolTip.text: w.error ? String(w.error) : root.t("sourceProblem")
+                                        HoverHandler { id: weatherStaleHover }
                                     }
 
                                     PlasmaComponents3.Label {
@@ -5307,6 +6232,104 @@ PlasmoidItem {
                                 }
                             }
                         }
+
+                        // Keep the heading quiet, but retain visible provider credit.
+                        // OpenWeather currently requires the attribution phrase, link
+                        // and logo in the visible part of the solution; Open-Meteo
+                        // requires CC-BY attribution. The info button above opens more
+                        // detail, while this footer stays deliberately unobtrusive.
+                        RowLayout {
+                            visible: Boolean(root.showWeather && root.rssData.weather && root.rssData.weather.provider)
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.topMargin: 1
+                            spacing: 3
+
+                            Item { Layout.fillWidth: true }
+
+                            Image {
+                                visible: root.rssData.weather && root.rssData.weather.provider === "openweather"
+                                source: "https://openweathermap.org/themes/openweathermap/assets/img/logo_white_cropped.png"
+                                asynchronous: true
+                                cache: true
+                                fillMode: Image.PreserveAspectFit
+                                Layout.preferredWidth: 42
+                                Layout.preferredHeight: 12
+                                Layout.alignment: Qt.AlignVCenter
+                                opacity: 0.38
+                            }
+
+                            PlasmaComponents3.Label {
+                                text: root.rssData.weather && root.rssData.weather.provider === "openweather"
+                                      ? '<a href="https://openweathermap.org/">Weather data provided by OpenWeather</a>'
+                                      : '<a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>'
+                                textFormat: Text.RichText
+                                linkColor: Kirigami.Theme.textColor
+                                onLinkActivated: function(link) { root.openExternalUrl(link) }
+                                opacity: 0.42
+                                font.pixelSize: Math.max(8, root.smallSize - 3)
+                                elide: Text.ElideRight
+                                Layout.maximumWidth: Math.max(150, root.panelPopupWidth * 0.42)
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                        }
+
+                        QQC2.Popup {
+                            id: weatherSourcePopup
+                            parent: weatherSourceInfoButton
+                            x: 0
+                            y: weatherSourceInfoButton.height + Kirigami.Units.smallSpacing
+                            modal: false
+                            focus: true
+                            closePolicy: QQC2.Popup.CloseOnEscape | QQC2.Popup.CloseOnPressOutside
+                            width: Math.min(420, Math.max(280, scroll.availableWidth - Kirigami.Units.largeSpacing * 2))
+                            padding: Kirigami.Units.largeSpacing
+
+                            contentItem: ColumnLayout {
+                                spacing: Kirigami.Units.smallSpacing
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.t("weatherSourceInfo")
+                                    font.bold: true
+                                    font.pixelSize: root.bodySize
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                PlasmaComponents3.Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.rssData.weather && root.rssData.weather.provider === "openweather"
+                                          ? root.t("weatherSourceOpenWeatherInfo")
+                                          : root.t("weatherSourceOpenMeteoInfo")
+                                    font.pixelSize: root.smallSize
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                    opacity: 0.82
+                                }
+
+                                QQC2.Button {
+                                    text: root.t("weatherSourceOpenProvider")
+                                    icon.name: "internet-web-browser"
+                                    font.pixelSize: root.smallSize
+                                    onClicked: {
+                                        root.openExternalUrl(root.rssData.weather && root.rssData.weather.provider === "openweather"
+                                                             ? "https://openweathermap.org/"
+                                                             : "https://open-meteo.com/")
+                                        weatherSourcePopup.close()
+                                    }
+                                }
+
+                                QQC2.Button {
+                                    visible: Boolean(root.rssData.weather && root.rssData.weather.provider !== "openweather")
+                                    text: root.t("weatherSourceLicense")
+                                    icon.name: "documentinfo"
+                                    font.pixelSize: root.smallSize
+                                    onClicked: root.openExternalUrl("https://creativecommons.org/licenses/by/4.0/")
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -5316,6 +6339,35 @@ PlasmoidItem {
                     ColumnLayout {
                         width: Math.max(scroll.availableWidth, 340)
                         spacing: Kirigami.Units.smallSpacing
+
+                        // Cached prayer times are only mildly stale within a
+                        // day, but across midnight they are simply wrong. The
+                        // backend distinguishes the two; this surfaces it.
+                        Rectangle {
+                            visible: Boolean(root.showPrayer && root.prayerIsStale())
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            radius: Kirigami.Units.smallSpacing
+                            color: Kirigami.Theme.backgroundColor
+                            border.color: root.prayerIsOutdated() ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.neutralTextColor
+                            border.width: 1
+                            implicitHeight: prayerStaleLabel.implicitHeight + Kirigami.Units.smallSpacing * 2
+
+                            PlasmaComponents3.Label {
+                                id: prayerStaleLabel
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                text: root.prayerStaleText()
+                                textFormat: Text.PlainText
+                                color: root.prayerIsOutdated() ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.neutralTextColor
+                                font.pixelSize: root.smallSize
+                                font.bold: root.prayerIsOutdated()
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideNone
+                            }
+                        }
 
                         RowLayout {
                             visible: root.showPrayer
@@ -5525,8 +6577,71 @@ PlasmoidItem {
                             }
                         }
 
+                        // Incomplete warning status. This must be shown before
+                        // any all-clear text: a source that could not be
+                        // reached is not an absence of warnings, and rendering
+                        // it as one is the most dangerous thing this widget
+                        // could do.
+                        Rectangle {
+                            visible: Boolean(root.showNina && root.ninaIncomplete())
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            radius: Kirigami.Units.smallSpacing
+                            color: Kirigami.Theme.backgroundColor
+                            border.color: Kirigami.Theme.neutralTextColor
+                            border.width: 1
+                            implicitHeight: ninaIncompleteRow.implicitHeight + Kirigami.Units.smallSpacing * 2
+
+                            RowLayout {
+                                id: ninaIncompleteRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Kirigami.Icon {
+                                    source: "data-warning"
+                                    implicitWidth: root.bodySize
+                                    implicitHeight: root.bodySize
+                                    Layout.alignment: Qt.AlignTop
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: 1
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("warnIncomplete")
+                                        textFormat: Text.PlainText
+                                        color: Kirigami.Theme.neutralTextColor
+                                        font.pixelSize: root.smallSize
+                                        font.bold: true
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        visible: root.ninaNotice().length > 0
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.ninaNotice()
+                                        textFormat: Text.PlainText
+                                        opacity: 0.85
+                                        font.pixelSize: root.smallSize
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+                            }
+                        }
+
                         PlasmaComponents3.Label {
-                            visible: Boolean(root.showNina && root.rssData && root.rssData.nina && root.rssData.nina.items && root.rssData.nina.items.length === 0)
+                            // Only an actually complete check may report an all-clear.
+                            visible: Boolean(root.showNina && !root.ninaIncomplete() && root.rssData && root.rssData.nina && root.rssData.nina.items && root.rssData.nina.items.length === 0)
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             text: root.rssData.nina && root.rssData.nina.location ? (root.t("noWarningsFor") + root.rssData.nina.location) : root.t("noWarnings")
@@ -5587,6 +6702,19 @@ PlasmoidItem {
                                     }
 
                                     PlasmaComponents3.Label {
+                                        visible: root.warningIsStale(n)
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.warningStaleText(n)
+                                        textFormat: Text.PlainText
+                                        color: Kirigami.Theme.neutralTextColor
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        font.bold: true
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+
+                                    PlasmaComponents3.Label {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
                                         text: n.details || ""
@@ -5635,19 +6763,28 @@ PlasmoidItem {
 
                             QQC2.ToolButton {
                                 id: systemBlockRefreshButton
-                                icon.name: "view-refresh"
+                                property bool busy: root.isBlockRefreshing("system")
+                                icon.name: busy ? "" : "view-refresh"
                                 display: QQC2.AbstractButton.IconOnly
                                 implicitWidth: Kirigami.Units.gridUnit * 0.95
                                 implicitHeight: Kirigami.Units.gridUnit * 0.95
                                 enabled: true
-                                opacity: root.isBlockRefreshing("system") ? 0.58 : 0.88
+                                opacity: busy ? 1.0 : (root.refreshJobActive ? 0.34 : 0.88)
                                 icon.width: Math.max(10, root.smallSize - 2)
                                 icon.height: icon.width
                                 icon.color: root.appHighlightColor
+
+                                QQC2.BusyIndicator {
+                                    anchors.centerIn: parent
+                                    width: Math.max(14, root.smallSize + 1)
+                                    height: width
+                                    running: systemBlockRefreshButton.busy
+                                    visible: running
+                                }
                                 QQC2.ToolTip.visible: hovered
-                                QQC2.ToolTip.text: root.isBlockRefreshing("system") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("system"))
+                                QQC2.ToolTip.text: root.refreshJobActive ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("system"))
                                 onClicked: {
-                                    if (!root.refreshing && !root.isBlockRefreshing("system")) {
+                                    if (!root.refreshJobActive) {
                                         root.triggerBlockRefresh("system")
                                     }
                                 }
@@ -5768,19 +6905,28 @@ PlasmoidItem {
 
                             QQC2.ToolButton {
                                 id: marketsBlockRefreshButton
-                                icon.name: "view-refresh"
+                                property bool busy: root.isBlockRefreshing("markets")
+                                icon.name: busy ? "" : "view-refresh"
                                 display: QQC2.AbstractButton.IconOnly
                                 implicitWidth: Kirigami.Units.gridUnit * 0.95
                                 implicitHeight: Kirigami.Units.gridUnit * 0.95
                                 enabled: true
-                                opacity: root.isBlockRefreshing("markets") ? 0.58 : 0.88
+                                opacity: busy ? 1.0 : (root.refreshJobActive ? 0.34 : 0.88)
                                 icon.width: Math.max(10, root.smallSize - 2)
                                 icon.height: icon.width
                                 icon.color: root.appHighlightColor
+
+                                QQC2.BusyIndicator {
+                                    anchors.centerIn: parent
+                                    width: Math.max(14, root.smallSize + 1)
+                                    height: width
+                                    running: marketsBlockRefreshButton.busy
+                                    visible: running
+                                }
                                 QQC2.ToolTip.visible: hovered
-                                QQC2.ToolTip.text: root.isBlockRefreshing("markets") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("markets"))
+                                QQC2.ToolTip.text: root.refreshJobActive ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("markets"))
                                 onClicked: {
-                                    if (!root.refreshing && !root.isBlockRefreshing("markets")) {
+                                    if (!root.refreshJobActive) {
                                         root.triggerBlockRefresh("markets")
                                     }
                                 }
@@ -6238,22 +7384,51 @@ PlasmoidItem {
 
                             QQC2.ToolButton {
                                 id: newsBlockRefreshButton
-                                icon.name: "view-refresh"
+                                property bool busy: root.isBlockRefreshing("news")
+                                icon.name: busy ? "" : "view-refresh"
                                 display: QQC2.AbstractButton.IconOnly
                                 implicitWidth: Kirigami.Units.gridUnit * 0.95
                                 implicitHeight: Kirigami.Units.gridUnit * 0.95
                                 enabled: true
-                                opacity: root.isBlockRefreshing("news") ? 0.58 : 0.88
+                                opacity: busy ? 1.0 : (root.refreshJobActive ? 0.34 : 0.88)
                                 icon.width: Math.max(10, root.smallSize - 2)
                                 icon.height: icon.width
                                 icon.color: root.appHighlightColor
+
+                                QQC2.BusyIndicator {
+                                    anchors.centerIn: parent
+                                    width: Math.max(14, root.smallSize + 1)
+                                    height: width
+                                    running: newsBlockRefreshButton.busy
+                                    visible: running
+                                }
                                 QQC2.ToolTip.visible: hovered
-                                QQC2.ToolTip.text: root.isBlockRefreshing("news") ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("news"))
+                                QQC2.ToolTip.text: root.refreshJobActive ? root.t("loading") : (root.t("refreshBlock") + ": " + root.t("news"))
                                 onClicked: {
-                                    if (!root.refreshing && !root.isBlockRefreshing("news")) {
+                                    if (!root.refreshJobActive) {
                                         root.triggerBlockRefresh("news")
                                     }
                                 }
+                            }
+
+                            QQC2.ToolButton {
+                                id: newsStatusButton
+                                visible: root.newsHasProblem()
+                                icon.name: "dialog-warning"
+                                display: QQC2.AbstractButton.IconOnly
+                                implicitWidth: Kirigami.Units.gridUnit * 0.95
+                                implicitHeight: Kirigami.Units.gridUnit * 0.95
+                                icon.width: Math.max(10, root.smallSize - 2)
+                                icon.height: icon.width
+                                icon.color: root.newsStatusColor()
+                                QQC2.ToolTip.visible: hovered
+                                QQC2.ToolTip.text: root.newsStatusSummary()
+                                onVisibleChanged: {
+                                    if (!visible) {
+                                        root.newsStatusOpen = false
+                                    }
+                                }
+                                onClicked: root.newsStatusOpen = !root.newsStatusOpen
                             }
 
                             QQC2.ToolButton {
@@ -6269,15 +7444,119 @@ PlasmoidItem {
                             Item { Layout.fillWidth: true }
                         }
 
-                        PlasmaComponents3.Label {
-                            visible: Boolean(root.showNews && root.rssData && root.rssData.errors && root.rssData.errors.length > 0)
+                        // News source status banner (v2.1.0).
+                        //
+                        // Replaces the old line that joined raw exception class
+                        // names ("Tagesschau: HTTPError · ORF: URLError") into
+                        // one string. That told the user nothing they could act
+                        // on. The helper now reports the likely cause, so this
+                        // shows one calm sentence plus an optional per-source
+                        // breakdown behind a disclosure toggle.
+                        //
+                        // Follows the same Rectangle + anchored-content shape as
+                        // the market API status box rather than inventing a new
+                        // layout idiom.
+                        Rectangle {
+                            visible: Boolean(root.showNews && root.newsHasProblem() && root.newsStatusOpen)
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
-                            text: root.rssData.errors ? root.rssData.errors.join(" · ") : ""
-                            color: Kirigami.Theme.neutralTextColor
-                            font.pixelSize: root.smallSize
-                            wrapMode: Text.WordWrap
-                            elide: Text.ElideNone
+                            color: Kirigami.Theme.backgroundColor
+                            border.color: root.newsStatusColor()
+                            border.width: 1
+                            radius: Kirigami.Units.smallSpacing
+                            implicitHeight: newsStatusColumn.implicitHeight + Kirigami.Units.smallSpacing * 2
+
+                            ColumnLayout {
+                                id: newsStatusColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                spacing: 2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    Kirigami.Icon {
+                                        source: root.newsStatusSeverity() === "error" ? "network-disconnect" : "dialog-information"
+                                        implicitWidth: root.smallSize + 2
+                                        implicitHeight: root.smallSize + 2
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.topMargin: 2
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.newsStatusSummary()
+                                        textFormat: Text.PlainText
+                                        color: root.newsStatusColor()
+                                        font.pixelSize: root.smallSize
+                                        font.bold: true
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
+                                PlasmaComponents3.Label {
+                                    visible: root.newsStatusHint().length > 0
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.newsStatusHint()
+                                    textFormat: Text.PlainText
+                                    opacity: 0.85
+                                    font.pixelSize: root.smallSize
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 2
+                                    spacing: Kirigami.Units.largeSpacing
+
+                                    PlasmaComponents3.Label {
+                                        text: root.newsDetailsOpen ? root.t("newsHideDetails") : root.t("newsShowDetails")
+                                        font.pixelSize: root.smallSize
+                                        font.underline: detailsArea.containsMouse || activeFocus
+                                        color: root.appHighlightColor
+                                        activeFocusOnTab: true
+                                        Keys.onReturnPressed: root.newsDetailsOpen = !root.newsDetailsOpen
+                                        Keys.onEnterPressed: root.newsDetailsOpen = !root.newsDetailsOpen
+
+                                        MouseArea {
+                                            id: detailsArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.newsDetailsOpen = !root.newsDetailsOpen
+                                        }
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        text: root.t("newsRetryNow")
+                                        font.pixelSize: root.smallSize
+                                        font.underline: retryArea.containsMouse || activeFocus
+                                        color: root.appHighlightColor
+                                        opacity: root.refreshJobActive ? 0.5 : 1.0
+                                        activeFocusOnTab: !root.refreshJobActive
+                                        Keys.onReturnPressed: if (!root.refreshJobActive) root.triggerBlockRefresh("news")
+                                        Keys.onEnterPressed: if (!root.refreshJobActive) root.triggerBlockRefresh("news")
+
+                                        MouseArea {
+                                            id: retryArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            enabled: !root.refreshJobActive
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.triggerBlockRefresh("news")
+                                        }
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+                            }
                         }
 
                         Repeater {
@@ -6309,22 +7588,62 @@ PlasmoidItem {
                                             opacity: 0.10
                                         }
 
-                                        PlasmaComponents3.Label {
-                                            id: sourceName
+                                        RowLayout {
                                             anchors.left: parent.left
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.leftMargin: Kirigami.Units.smallSpacing
                                             anchors.rightMargin: Kirigami.Units.smallSpacing
-                                            text: feed.name || "Feed"
-                                            textFormat: Text.PlainText
-                                            font.bold: true
-                                            font.pixelSize: root.newsBodySize
-                                            font.family: root.normalizedFontFamily(root.newsFontFamily)
-                                            color: root.appHighlightColor
-                                            wrapMode: Text.WordWrap
-                                            elide: Text.ElideNone
+                                            spacing: Kirigami.Units.smallSpacing
+
+                                            PlasmaComponents3.Label {
+                                                id: sourceName
+                                                Layout.fillWidth: true
+                                                Layout.minimumWidth: 0
+                                                text: feed.name || "Feed"
+                                                textFormat: Text.PlainText
+                                                font.bold: true
+                                                font.pixelSize: root.newsBodySize
+                                                font.family: root.normalizedFontFamily(root.newsFontFamily)
+                                                color: root.appHighlightColor
+                                                wrapMode: Text.WordWrap
+                                                elide: Text.ElideNone
+                                            }
+
+                                            // Per-source marker. Only appears for a source that
+                                            // actually failed, so a healthy dashboard stays clean.
+                                            PlasmaComponents3.Label {
+                                                visible: !root.feedIsOk(feed)
+                                                text: root.feedIsStale(feed) ? root.t("feedStale") : "!"
+                                                textFormat: Text.PlainText
+                                                font.pixelSize: Math.max(9, root.smallSize - 1)
+                                                color: root.feedIsStale(feed)
+                                                       ? Kirigami.Theme.neutralTextColor
+                                                       : Kirigami.Theme.negativeTextColor
+                                                Layout.alignment: Qt.AlignVCenter
+
+                                                QQC2.ToolTip.visible: feedStatusHover.hovered
+                                                QQC2.ToolTip.text: root.feedErrorMessage(feed) + "\n" + root.feedLastOkText(feed)
+                                                HoverHandler { id: feedStatusHover }
+                                            }
                                         }
+                                    }
+
+                                    // Expanded diagnostics: one line per failing
+                                    // source with the concrete cause and the age
+                                    // of the data still on screen.
+                                    PlasmaComponents3.Label {
+                                        visible: root.newsDetailsOpen && !root.feedIsOk(feed)
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        Layout.leftMargin: Kirigami.Units.smallSpacing
+                                        Layout.rightMargin: Kirigami.Units.smallSpacing
+                                        text: root.feedErrorMessage(feed) + " · " + root.feedLastOkText(feed)
+                                        textFormat: Text.PlainText
+                                        color: Kirigami.Theme.neutralTextColor
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
                                     }
 
                                     Repeater {
@@ -6370,6 +7689,22 @@ PlasmoidItem {
                                                     wrapMode: Text.WordWrap
                                                     elide: Text.ElideNone
                                                     color: (headline.clickable && clickArea.containsMouse) ? root.appHighlightColor : Kirigami.Theme.textColor
+                                                }
+
+                                                // Publication age, parsed from the feed's
+                                                // pubDate/updated field by the helper. Feeds
+                                                // that omit a timestamp simply show nothing.
+                                                PlasmaComponents3.Label {
+                                                    visible: root.showNewsAge && text.length > 0
+                                                    Layout.alignment: Qt.AlignTop
+                                                    Layout.topMargin: Math.max(0, Math.round(root.newsBodySize * 0.12))
+                                                    text: root.headlineAgeText(headline.entry)
+                                                    textFormat: Text.PlainText
+                                                    font.pixelSize: Math.max(9, root.newsBodySize - 4)
+                                                    font.family: root.normalizedFontFamily(root.newsFontFamily)
+                                                    color: root.headlineAgeColor(headline.entry)
+                                                    opacity: root.headlineAgeOpacity(headline.entry)
+                                                    font.bold: root.headlineAgeBold(headline.entry)
                                                 }
                                             }
 

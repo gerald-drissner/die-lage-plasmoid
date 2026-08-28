@@ -7,6 +7,9 @@ Description=Check Die Lage cache interval
 # so the overhead is only a tiny Python/config-read check between real fetches.
 OnBootSec=1min
 OnUnitActiveSec=1min
+# Let systemd coalesce this wake-up with other timers instead of forcing a
+# dedicated wake every 60 s. Saves battery on laptops at no visible cost.
+AccuracySec=20s
 Unit=dielage-cache.service
 
 [Install]
