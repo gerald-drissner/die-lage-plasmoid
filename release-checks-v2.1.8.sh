@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Pre-release checks for Die Lage v2.1.7.
+# Pre-release checks for Die Lage v2.1.8.
 # Run from the unpacked release folder. Exits non-zero on the first failure.
 
 set -euo pipefail
 cd -- "$(cd -- "$(dirname -- "$0")" && pwd)"
 export PYTHONDONTWRITEBYTECODE=1
 
-VERSION="2.1.7"
+VERSION="2.1.8"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok  $*"; }
 CHECK_TMP="$(mktemp -d)"
@@ -29,7 +29,7 @@ for name in ("files/bin/dielage-cache.py", "files/bin/dielage-server.py", "tests
     compile(Path(name).read_text(encoding="utf-8"), name, "exec")
 PY
 ok "Python sources compile"
-for f in install.sh uninstall.sh emergency-clean-dielage.sh release-checks-v2.1.7.sh; do
+for f in install.sh uninstall.sh emergency-clean-dielage.sh release-checks-v2.1.8.sh; do
     bash -n "$f" || fail "$f syntax"
 done
 ok "shell scripts parse"
@@ -48,7 +48,7 @@ root = ET.parse("files/plasmoid/metadata.appdata.xml").getroot()
 releases = root.find("releases")
 assert releases is not None and len(releases), "AppStream releases missing"
 assert releases[0].attrib.get("version") == want, releases[0].attrib
-assert releases[0].attrib.get("date") == "2026-08-28", releases[0].attrib
+assert releases[0].attrib.get("date") == "2026-09-20", releases[0].attrib
 assert root.findtext("id") == d["KPlugin"]["Id"]
 PY
 ok "metadata.json and AppStream metadata valid, latest release ${VERSION}"
@@ -283,7 +283,7 @@ PY
 ok "systemd units keep the expected privacy/resource hardening"
 
 echo "-- release-specific UI sanity --"
-python3 - <<'PY' || fail "v2.1.7 UI sanity"
+python3 - <<'PY' || fail "v2.1.8 UI sanity"
 from pathlib import Path
 import re, json
 qml = Path("files/plasmoid/contents/ui/main.qml").read_text(encoding="utf-8")
@@ -292,7 +292,7 @@ assert '"weatherApiOk": "OpenWeather-API-Key funktioniert."' in qml
 assert "{location}" not in re.search(r'readonly property var i18n(?:En|De):.*?function t\(', qml, re.S).group(0)
 server = Path("files/bin/dielage-server.py").read_text(encoding="utf-8")
 assert '"reason": "ok"' in server and '"location"' not in re.search(r'def check_openweather_api\(.*?\n\n', server, re.S).group(0)
-# v2.1.7 live-UI fixes
+# v2.1.8 live-UI fixes
 assert 'id: weatherSourceInfoButton' in qml and 'id: weatherSourcePopup' in qml
 assert 'Weather data provided by OpenWeather' in qml
 assert 'logo_white_cropped.png' in qml
@@ -382,6 +382,12 @@ for f in files/bin/dielage-cache.py files/bin/dielage-server.py \
     [ -f "$f" ] || fail "missing $f"
 done
 ok "all shipped files present"
+
+grep -q '^OnStartupSec=3min$' files/systemd/dielage-cache.timer || fail "regular cache timer does not wait 3 minutes after user-session startup"
+if grep -q '^OnBootSec=' files/systemd/dielage-cache.timer; then
+    fail "regular cache timer still uses boot-relative OnBootSec"
+fi
+ok "regular cache timer is user-session-relative and startup-friendly"
 
 echo
 echo "All checks passed for v${VERSION}."

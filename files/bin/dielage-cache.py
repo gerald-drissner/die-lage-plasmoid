@@ -170,7 +170,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.1.7 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.1.8 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 
 REFRESHABLE_BLOCKS = {"weather", "system", "markets", "news"}
 
@@ -4293,7 +4293,7 @@ def build_cache(config: dict | None = None) -> dict:
         "_refresh": {
             "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
             "system": now_ts if refresh_system_block else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
-            "version": "2.1.7",
+            "version": "2.1.8",
             "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
             "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },

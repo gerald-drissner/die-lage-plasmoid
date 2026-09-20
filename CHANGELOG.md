@@ -1,5 +1,14 @@
 # Die Lage Changelog
 
+## v2.1.8
+
+Startup-performance maintenance release.
+
+- The normal `dielage-cache.timer` now uses `OnStartupSec=3min` instead of `OnBootSec=1min`. The first periodic cache check is therefore tied to the user session and no longer races Plasma, Akonadi and other login work.
+- The one-minute recurring check remains unchanged after that first run, so a configured `fetch_interval_minutes=1` is still honoured.
+- The existing **Info / Dienst** settings for the first forced refresh after login/reboot remain unchanged: users can disable that refresh entirely or choose its delay.
+- Existing user configuration, feeds, API keys and cache intervals are preserved on upgrade.
+
 ## v2.1.7
 
 UI polish after the v2.1.6 Plasma live test.

@@ -93,6 +93,12 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.1.8" date="2026-09-20">
+      <description>
+        <p>Delays the first regular cache check until three minutes after the Plasma user session starts, avoiding unnecessary competition with desktop startup while preserving the existing configurable forced login refresh.</p>
+        <p xml:lang="de">Verschiebt die erste reguläre Cache-Prüfung auf drei Minuten nach dem Start der Plasma-Benutzersitzung. So konkurriert Die Lage beim Anmelden nicht unnötig mit dem Desktop; die vorhandene einstellbare erzwungene Aktualisierung nach Login/Neustart bleibt unverändert.</p>
+      </description>
+    </release>
     <release version="2.1.7" date="2026-08-28">
       <description>
         <p>Refines the live UI: weather attribution moves out of the heading into a quiet footer with a compact source-info control, refresh controls keep a clearly visible spinner while work is running, and RSS publication ages gain an optional continuous color scale with configurable duration and colors that default to the Plasma theme.</p>
