@@ -20,6 +20,8 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-MemoryMax=256M
+# The forced login refresh can invoke package/update helpers such as Flatpak,
+# so it needs the same practical memory ceiling as the regular cache service.
+MemoryMax=768M
 TasksMax=64
 ExecStart=%h/.local/bin/dielage-cache.py --force
