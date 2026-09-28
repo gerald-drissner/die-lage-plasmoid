@@ -280,7 +280,7 @@ for path in cache_services:
     text = path.read_text(encoding="utf-8")
     assert "MemoryMax=768M" in text, f"{path}: cache memory ceiling is not 768M"
     assert "SuccessExitStatus=75" in text, f"{path}: lock exit not accepted"
-assert "MemoryMax=256M" in server.read_text(encoding="utf-8"), "local server should keep its smaller 256M ceiling"
+assert "MemoryMax=768M" in server.read_text(encoding="utf-8"), "manual refresh children need the same 768M cgroup ceiling"
 assert "Restart=on-failure" in server.read_text(encoding="utf-8")
 PY
 ok "systemd units keep the expected privacy/resource hardening"

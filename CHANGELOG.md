@@ -4,7 +4,7 @@
 
 Cross-distribution update-check and memory-safety release.
 
-- Fixed a reproducible cgroup OOM: Flatpak could push `dielage-cache.service` beyond its old 256 MiB limit. Cache and boot-refresh services now use a 768 MiB ceiling; the lightweight local server stays at 256 MiB.
+- Fixed a reproducible cgroup OOM: Flatpak could push `dielage-cache.service` beyond its old 256 MiB limit. Cache, boot-refresh and local-server services now use a 768 MiB ceiling because manual refresh workers are children of the local-server cgroup. The 768 MiB value is only a cap; it does not reserve memory.
 - Update checks now have their own interval (default 60 minutes) and no longer run whenever the normal System block refreshes.
 - Added explicit switches for native system packages, Flatpak and Snap. Native checks are enabled by default; Flatpak and Snap are opt-in and run sequentially.
 - Added read-only native update detection for Debian/Ubuntu (`apt`), Arch derivatives (`checkupdates`/`pacman`), Fedora/RHEL derivatives (`dnf5`/`dnf`), openSUSE (`zypper`), Alpine (`apk`), Void (`xbps`), Solus (`eopkg`), Gentoo (`emerge`) and rpm-ostree systems, with PackageKit as a generic fallback. Unknown distributions degrade to an unavailable status instead of failing the System block.
