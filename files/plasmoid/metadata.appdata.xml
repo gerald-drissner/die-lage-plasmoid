@@ -93,6 +93,12 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.1.9" date="2026-09-28">
+      <description>
+        <p>Separates Linux update checks from the normal System refresh, adds explicit native/Flatpak/Snap controls and a configurable interval, broadens native package-manager support, and prevents memory pressure from optional update queries. Cache refresh services now have a realistic 768 MiB safety ceiling.</p>
+        <p xml:lang="de">Entkoppelt Linux-Update-Prüfungen vom normalen System-Refresh, ergänzt getrennte Schalter für Systempakete/Flatpak/Snap und ein eigenes Intervall, erweitert die Paketmanager-Unterstützung und schützt Systeme mit wenig freiem RAM. Die Cache-Dienste erhalten zudem eine realistische Sicherheitsgrenze von 768 MiB.</p>
+      </description>
+    </release>
     <release version="2.1.8" date="2026-09-20">
       <description>
         <p>Delays the first regular cache check until three minutes after the Plasma user session starts, avoiding unnecessary competition with desktop startup while preserving the existing configurable forced login refresh.</p>

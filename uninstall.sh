@@ -70,6 +70,7 @@ systemctl --user reset-failed "${UNITS[@]}" >/dev/null 2>&1 || true
 
 # ---- Remove helper scripts --------------------------------------------------
 rm -f "$HOME/.local/bin/dielage-cache.py"
+rm -f "$HOME/.local/bin/dielage_updates.py"
 rm -f "$HOME/.local/bin/dielage-server.py"
 # Keep the uninstaller itself for normal uninstall so a later purge remains
 # possible. Remove it only when --purge is requested.

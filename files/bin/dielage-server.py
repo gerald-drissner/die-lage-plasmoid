@@ -83,20 +83,14 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
            {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
            {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
            {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
-           {'limit': 4,
-            'name': 'Haaretz ME',
-            'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
+           {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
            {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
            {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
-           {'limit': 3,
-            'name': 'RBB24',
-            'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
+           {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
            {'limit': 3,
             'name': 'Polizei Berlin',
             'url': 'https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml'},
-           {'limit': 3,
-            'name': 'Heise online',
-            'url': 'https://www.heise.de/newsticker/heise.rdf'}],
+           {'limit': 3, 'name': 'Heise online', 'url': 'https://www.heise.de/newsticker/heise.rdf'}],
  'weather_locations': [{'name': 'Hennigsdorf', 'lat': 52.6391, 'lon': 13.209},
                        {'name': 'Berlin', 'lat': 52.5155, 'lon': 13.4546},
                        {'name': 'Bludenz', 'lat': 47.1527, 'lon': 9.8276},
@@ -150,19 +144,19 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'news_age_color_minutes': 120,
         'news_age_recent_color': '',
         'news_age_older_color': ''},
- 'blocks': {'weather': True,
-            'prayer': True,
-            'nina': True,
-            'news': True,
-            'markets': True,
-            'system': True},
+ 'blocks': {'weather': True, 'prayer': True, 'nina': True, 'news': True, 'markets': True, 'system': True},
  'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
  'system': {'show_info': True,
             'show_network': True,
             'show_public_network': False,
             'show_updates': True,
             'show_vpn': True,
-            'vpn_label': ''},
+            'vpn_label': '',
+            'updates_check_native': True,
+            'updates_check_flatpak': False,
+            'updates_check_snap': False,
+            'updates_interval_minutes': 60,
+            'updates_low_memory_protection': True},
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
@@ -325,7 +319,7 @@ def clear_cache_files() -> list[str]:
         # counters and backoff windows. Leaving the latter behind meant
         # "cache cleared" was not true: a feed still in a 2 h backoff stayed
         # in it, and stale validators could suppress a full refetch.
-        if path.name in ("rss.json", "feedstate.json") or path.name.startswith(("rss.json.tmp.", "feedstate.json.tmp.")):
+        if path.name in ("rss.json", "feedstate.json", "updates.json") or path.name.startswith(("rss.json.tmp.", "feedstate.json.tmp.", "updates.json.tmp.")):
             try:
                 path.unlink()
                 removed.append(path.name)
@@ -675,7 +669,7 @@ def read_json_post_body(handler) -> dict:
 
 
 def _api_probe_json(url: str, headers: dict[str, str], max_bytes: int = 300_000) -> dict:
-    request_headers = {"User-Agent": "DieLage/2.1.8 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
+    request_headers = {"User-Agent": "DieLage/2.1.9 (+https://github.com/gerald-drissner/die-lage-plasmoid)"}
     request_headers.update(headers)
     req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -821,7 +815,7 @@ def tool_status() -> dict:
     return {
         "ok": True,
         "service": "com.drissner.dielage",
-        "version": "2.1.8",
+        "version": "2.1.9",
         "required": required,
         "recommended": recommended,
         "optional": optional,
@@ -948,7 +942,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"ok": True, "service": "com.drissner.dielage", "version": "2.1.8", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
+            self._send_json({"ok": True, "service": "com.drissner.dielage", "version": "2.1.9", "local_server_port": PORT, "port_range_min": PORT_MIN, "port_range_max": PORT_MAX})
         elif path == "/rss.json":
             self._send_json_file(CACHE_FILE)
         elif path == "/config":

@@ -186,7 +186,12 @@
     "show_public_network": false,
     "show_updates": true,
     "show_vpn": true,
-    "vpn_label": ""
+    "vpn_label": "",
+    "updates_check_native": true,
+    "updates_check_flatpak": false,
+    "updates_check_snap": false,
+    "updates_interval_minutes": 60,
+    "updates_low_memory_protection": true
   },
   "collapsed_blocks": {
     "nina": false,
