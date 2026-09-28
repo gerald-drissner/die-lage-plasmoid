@@ -1,0 +1,37 @@
+name: Finalize Die Lage v2.1.9 cgroup safety
+
+on:
+  push:
+    branches:
+      - feature/update-checks-v2.1.9
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-and-test:
+    if: ${{ !contains(github.event.head_commit.message, '[postfixed-v2.1.9]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/update-checks-v2.1.9
+          fetch-depth: 0
+      - name: Apply postfix
+        run: python3 tools/postfix_v2_1_9.py
+      - name: Remove one-shot files
+        run: |
+          rm -f tools/postfix_v2_1_9.py
+          rm -f .github/workflows/postfix-v2.1.9.yml
+          rmdir tools 2>/dev/null || true
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+      - name: Run full release checks
+        run: ./release-checks-v2.1.9.sh
+      - name: Commit tested postfix
+        run: |
+          git config user.name "Gerald Drißner"
+          git config user.email "mail@drissner.media"
+          git add -A
+          git commit -m "Protect manual update refreshes from cgroup OOM [postfixed-v2.1.9]"
+          git push origin HEAD:feature/update-checks-v2.1.9
