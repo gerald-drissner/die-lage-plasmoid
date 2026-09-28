@@ -1,0 +1,42 @@
+name: Prepare Die Lage v2.1.9 patch
+
+on:
+  push:
+    branches:
+      - feature/update-checks-v2.1.9
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-and-test:
+    if: ${{ !contains(github.event.head_commit.message, '[prepared-v2.1.9]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/update-checks-v2.1.9
+          fetch-depth: 0
+
+      - name: Prepare patch
+        run: python3 tools/prepare_v2_1_9.py
+
+      - name: Remove one-shot preparation files before release validation
+        run: |
+          rm -f tools/prepare_v2_1_9.py
+          rm -f .github/workflows/prepare-v2.1.9.yml
+          rmdir tools 2>/dev/null || true
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+      - name: Run exact release checks
+        run: ./release-checks-v2.1.9.sh
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "Gerald Drißner"
+          git config user.email "mail@drissner.media"
+          git add -A
+          git diff --cached --stat
+          git commit -m "Implement safe cross-distro update checks for v2.1.9 [prepared-v2.1.9]"
+          git push origin HEAD:feature/update-checks-v2.1.9
