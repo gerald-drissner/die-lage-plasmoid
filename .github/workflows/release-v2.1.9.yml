@@ -1,0 +1,115 @@
+name: Release Die Lage v2.1.9
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-v2.1.9.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.head_commit.message == 'Release Die Lage v2.1.9'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: 584c10e4820bc7e0de35bbfee5264a409936dc9c
+      VERSION: 2.1.9
+      TAG: v2.1.9
+    steps:
+      - name: Check out exact tested release tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip unzip rsync
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/full
+
+          rsync -a ./ dist/full/ \
+            --exclude='.git/' \
+            --exclude='dist/' \
+            --exclude='*.zip' \
+            --exclude='*.plasmoid'
+
+          (
+            cd dist/full
+            zip -qr ../die-lage-v${VERSION}.zip .
+          )
+
+          cp "dist/die-lage-v${VERSION}.zip" dist/die-lage-latest.zip
+          cmp -s "dist/die-lage-v${VERSION}.zip" dist/die-lage-latest.zip
+
+          (
+            cd files/plasmoid
+            zip -qr "../../dist/die-lage-${VERSION}.plasmoid" .
+          )
+
+          unzip -p "dist/die-lage-${VERSION}.plasmoid" metadata.json | grep -q '"Version": "2.1.9"'
+          sha256sum dist/die-lage-${VERSION}.plasmoid dist/die-lage-v${VERSION}.zip dist/die-lage-latest.zip
+
+      - name: Verify exact unpacked full release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/die-lage-release-check
+          mkdir -p /tmp/die-lage-release-check
+          unzip -q "dist/die-lage-v${VERSION}.zip" -d /tmp/die-lage-release-check
+          cd /tmp/die-lage-release-check
+          ./release-checks-v2.1.9.sh
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          Cross-distribution update-check and memory-safety release.
+
+          - Fixes the reproduced cgroup OOM problem: package/update helpers could exceed the former 256 MiB service limit. Cache, boot-refresh and local-server services now use a 768 MiB safety ceiling. This is only a cap; it does not reserve RAM.
+          - Adds an independent update-check interval (default: 60 minutes), separate from the normal System refresh.
+          - Adds separate controls for native system packages, Flatpak and Snap. Flatpak and Snap are opt-in, and enabled sources are checked sequentially.
+          - Supports Debian/Ubuntu, Arch derivatives, Fedora/RHEL derivatives, openSUSE, Alpine, Void, Solus, Gentoo and rpm-ostree systems, with PackageKit as a generic fallback.
+          - Adds low-memory protection: due package checks can be postponed when less than about 1 GiB RAM is available, while the last successful result remains visible.
+          - Update checks are read-only: Die Lage never installs packages and never forces a package-metadata refresh.
+
+          Release assets:
+          - `die-lage-2.1.9.plasmoid` — KDE Plasma widget package
+          - `die-lage-v2.1.9.zip` — full installer including helpers and systemd user units
+          - `die-lage-latest.zip` — byte-identical stable alias of the full installer
+
+          The full release test suite passed, and the candidate was additionally tested on a real Kubuntu 26.04 / Plasma 6 desktop.
+          EOF
+
+      - name: Create GitHub release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --target "$RELEASE_SHA" \
+            --title "Die Lage v${VERSION}" \
+            --notes-file /tmp/release-notes.md \
+            "dist/die-lage-${VERSION}.plasmoid#KDE Plasma widget package" \
+            "dist/die-lage-v${VERSION}.zip#Full installer" \
+            "dist/die-lage-latest.zip#Stable full-installer alias"
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json tagName,name,isDraft,isPrerelease,url,assets
