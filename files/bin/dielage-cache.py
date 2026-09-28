@@ -64,20 +64,14 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
            {'limit': 4, 'name': 'BBC World', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'},
            {'limit': 3, 'name': 'Al Jazeera', 'url': 'https://www.aljazeera.com/xml/rss/all.xml'},
            {'limit': 3, 'name': 'The New Arab', 'url': 'https://www.newarab.com/rss'},
-           {'limit': 4,
-            'name': 'Haaretz ME',
-            'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
+           {'limit': 4, 'name': 'Haaretz ME', 'url': 'https://www.haaretz.com/srv/middle-east-news-rss'},
            {'limit': 4, 'name': 'ORF', 'url': 'https://rss.orf.at/news.xml'},
            {'limit': 3, 'name': 'Der Standard', 'url': 'https://www.derstandard.at/rss/inland'},
-           {'limit': 3,
-            'name': 'RBB24',
-            'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
+           {'limit': 3, 'name': 'RBB24', 'url': 'https://www.rbb24.de/aktuell/index.xml/feed=rss.xml'},
            {'limit': 3,
             'name': 'Polizei Berlin',
             'url': 'https://www.berlin.de/polizei/presse-fahndung/_rss_presse.xml'},
-           {'limit': 3,
-            'name': 'Heise online',
-            'url': 'https://www.heise.de/newsticker/heise.rdf'}],
+           {'limit': 3, 'name': 'Heise online', 'url': 'https://www.heise.de/newsticker/heise.rdf'}],
  'weather_locations': [{'name': 'Hennigsdorf', 'lat': 52.6391, 'lon': 13.209},
                        {'name': 'Berlin', 'lat': 52.5155, 'lon': 13.4546},
                        {'name': 'Bludenz', 'lat': 47.1527, 'lon': 9.8276},
@@ -131,19 +125,19 @@ DEFAULT_CONFIG = {'feeds': [{'limit': 5, 'name': 'Tagesschau', 'url': 'https://w
         'news_age_color_minutes': 120,
         'news_age_recent_color': '',
         'news_age_older_color': ''},
- 'blocks': {'weather': True,
-            'prayer': True,
-            'nina': True,
-            'news': True,
-            'markets': True,
-            'system': True},
+ 'blocks': {'weather': True, 'prayer': True, 'nina': True, 'news': True, 'markets': True, 'system': True},
  'block_order': ['nina', 'weather', 'prayer', 'system', 'markets', 'news'],
  'system': {'show_info': True,
             'show_network': True,
             'show_public_network': False,
             'show_updates': True,
             'show_vpn': True,
-            'vpn_label': ''},
+            'vpn_label': '',
+            'updates_check_native': True,
+            'updates_check_flatpak': False,
+            'updates_check_snap': False,
+            'updates_interval_minutes': 60,
+            'updates_low_memory_protection': True},
  'collapsed_blocks': {'nina': False,
                       'weather': False,
                       'prayer': False,
@@ -170,7 +164,7 @@ def load_default_config() -> dict:
 
 DEFAULT_CONFIG = load_default_config()
 
-UA = "DieLage/2.1.8 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
+UA = "DieLage/2.1.9 (+https://github.com/gerald-drissner/die-lage-plasmoid)"
 
 REFRESHABLE_BLOCKS = {"weather", "system", "markets", "news"}
 
@@ -225,6 +219,22 @@ def manual_refresh() -> bool:
 MARKET_TIMEZONE = "Europe/Berlin"
 SAFE_SUBPROCESS_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SAFE_SUBPROCESS_ENV = {**os.environ, "PATH": SAFE_SUBPROCESS_PATH}
+
+
+def _load_update_checker():
+    path = Path(__file__).with_name("dielage_updates.py")
+    try:
+        spec = __import__("importlib.util", fromlist=["util"]).spec_from_file_location("dielage_updates", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = __import__("importlib.util", fromlist=["util"]).module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+UPDATE_CHECKER = _load_update_checker()
 
 # Only allow http/https in user-supplied URLs. Without this guard, a config
 # pointing at file:// could read local files, and ftp:// or other schemes
@@ -4179,18 +4189,33 @@ def fetch_system_info(old: dict, config: dict) -> dict:
             item["label"] = labels[key]
         items.append(item)
 
+    update_policy = {}
     if show_updates:
-        updates, source = updates_available()
-        item = {"key": "updates", "label": labels["updates"], "value": updates}
-        if source:
-            item["source"] = source
-        items.append(item)
+        if UPDATE_CHECKER is not None:
+            try:
+                result = UPDATE_CHECKER.check_updates(cfg, force=manual_refresh())
+                item = UPDATE_CHECKER.as_system_item(result, english=english)
+                item["label"] = labels["updates"]
+                items.append(item)
+                update_policy = result.get("policy", {}) if isinstance(result, dict) else {}
+            except Exception as exc:
+                items.append({"key": "updates", "label": labels["updates"], "value": "--",
+                              "state": "warning", "details": f"{type(exc).__name__}"})
+        else:
+            # Packaging error fallback: preserve the old read-only native
+            # checker rather than breaking the entire System block.
+            updates, source = updates_available()
+            item = {"key": "updates", "label": labels["updates"], "value": updates}
+            if source:
+                item["source"] = source
+            items.append(item)
 
     return {
         "updated": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         "items": items,
         "errors": [],
         "enabled": True,
+        "update_policy": update_policy,
     }
 
 def load_old() -> dict:
@@ -4293,7 +4318,7 @@ def build_cache(config: dict | None = None) -> dict:
         "_refresh": {
             "main": now_ts if refresh_main else (old.get("_refresh", {}) or {}).get("main", cache_timestamp_fallback()),
             "system": now_ts if refresh_system_block else (old.get("_refresh", {}) or {}).get("system", cache_timestamp_fallback()),
-            "version": "2.1.8",
+            "version": "2.1.9",
             "main_interval_minutes": clamp_int(config.get("fetch_interval_minutes", 10), 10, 1, 1440),
             "system_interval_minutes": clamp_int(config.get("system_interval_minutes", 3), 3, 1, 1440),
         },

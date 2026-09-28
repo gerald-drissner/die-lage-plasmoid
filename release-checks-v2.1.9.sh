@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Pre-release checks for Die Lage v2.1.8.
+# Pre-release checks for Die Lage v2.1.9.
 # Run from the unpacked release folder. Exits non-zero on the first failure.
 
 set -euo pipefail
 cd -- "$(cd -- "$(dirname -- "$0")" && pwd)"
 export PYTHONDONTWRITEBYTECODE=1
 
-VERSION="2.1.8"
+VERSION="2.1.9"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok  $*"; }
 CHECK_TMP="$(mktemp -d)"
@@ -25,11 +25,11 @@ fi
 ok "release tree contains no generated/editor artifacts"
 python3 - <<'PY' || fail "Python syntax"
 from pathlib import Path
-for name in ("files/bin/dielage-cache.py", "files/bin/dielage-server.py", "tests/regression.py"):
+for name in ("files/bin/dielage-cache.py", "files/bin/dielage_updates.py", "files/bin/dielage-server.py", "tests/regression.py", "tests/update_checks.py"):
     compile(Path(name).read_text(encoding="utf-8"), name, "exec")
 PY
 ok "Python sources compile"
-for f in install.sh uninstall.sh emergency-clean-dielage.sh release-checks-v2.1.8.sh; do
+for f in install.sh uninstall.sh emergency-clean-dielage.sh release-checks-v2.1.9.sh; do
     bash -n "$f" || fail "$f syntax"
 done
 ok "shell scripts parse"
@@ -48,7 +48,7 @@ root = ET.parse("files/plasmoid/metadata.appdata.xml").getroot()
 releases = root.find("releases")
 assert releases is not None and len(releases), "AppStream releases missing"
 assert releases[0].attrib.get("version") == want, releases[0].attrib
-assert releases[0].attrib.get("date") == "2026-09-20", releases[0].attrib
+assert releases[0].attrib.get("date") == "2026-09-28", releases[0].attrib
 assert root.findtext("id") == d["KPlugin"]["Id"]
 PY
 ok "metadata.json and AppStream metadata valid, latest release ${VERSION}"
@@ -260,7 +260,8 @@ ok "HTTP codes and network errors map to the right causes"
 
 echo "-- behavioural regression suite --"
 python3 tests/regression.py || fail "regression tests"
-ok "regression suite green"
+python3 tests/update_checks.py || fail "cross-distro update-check tests"
+ok "regression and update-check suites green"
 
 echo "-- systemd hardening --"
 python3 - <<'PY' || fail "systemd unit hardening"
@@ -273,17 +274,19 @@ server = Path("files/systemd/dielage-local-server.service")
 for path in cache_services + [server]:
     text = path.read_text(encoding="utf-8")
     for required in ("UMask=0077", "NoNewPrivileges=yes", "PrivateTmp=yes",
-                     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
-                     "MemoryMax=256M", "TasksMax=64"):
+                     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "TasksMax=64"):
         assert required in text, f"{path}: missing {required}"
 for path in cache_services:
-    assert "SuccessExitStatus=75" in path.read_text(encoding="utf-8"), f"{path}: lock exit not accepted"
+    text = path.read_text(encoding="utf-8")
+    assert "MemoryMax=768M" in text, f"{path}: cache memory ceiling is not 768M"
+    assert "SuccessExitStatus=75" in text, f"{path}: lock exit not accepted"
+assert "MemoryMax=768M" in server.read_text(encoding="utf-8"), "manual refresh children need the same 768M cgroup ceiling"
 assert "Restart=on-failure" in server.read_text(encoding="utf-8")
 PY
 ok "systemd units keep the expected privacy/resource hardening"
 
 echo "-- release-specific UI sanity --"
-python3 - <<'PY' || fail "v2.1.8 UI sanity"
+python3 - <<'PY' || fail "v2.1.9 UI sanity"
 from pathlib import Path
 import re, json
 qml = Path("files/plasmoid/contents/ui/main.qml").read_text(encoding="utf-8")
@@ -292,7 +295,7 @@ assert '"weatherApiOk": "OpenWeather-API-Key funktioniert."' in qml
 assert "{location}" not in re.search(r'readonly property var i18n(?:En|De):.*?function t\(', qml, re.S).group(0)
 server = Path("files/bin/dielage-server.py").read_text(encoding="utf-8")
 assert '"reason": "ok"' in server and '"location"' not in re.search(r'def check_openweather_api\(.*?\n\n', server, re.S).group(0)
-# v2.1.8 live-UI fixes
+# v2.1.9 live-UI fixes
 assert 'id: weatherSourceInfoButton' in qml and 'id: weatherSourcePopup' in qml
 assert 'Weather data provided by OpenWeather' in qml
 assert 'logo_white_cropped.png' in qml
@@ -303,6 +306,26 @@ assert 'function headlineAgeColor(entry)' in qml
 assert '"news_age_color_minutes": root.newsAgeWindowMinutesValue()' in qml
 PY
 ok "OpenWeather success text, subtle attribution, refresh spinners and RSS age scale are wired"
+
+echo "-- v2.1.9 update-check safety --"
+python3 - <<'PY' || fail "v2.1.9 update-check wiring"
+import json, pathlib
+cfg = json.loads(pathlib.Path("files/config/default-config.json").read_text(encoding="utf-8"))
+s = cfg["system"]
+assert s["updates_check_native"] is True
+assert s["updates_check_flatpak"] is False
+assert s["updates_check_snap"] is False
+assert s["updates_interval_minutes"] == 60
+assert s["updates_low_memory_protection"] is True
+updates = pathlib.Path("files/bin/dielage_updates.py").read_text(encoding="utf-8")
+for token in ("apt-get", "pacman", "dnf5", "zypper", "apk", "xbps-install", "eopkg", "emerge", "rpm-ostree", "pkcon", "flatpak", "snap"):
+    assert token in updates, token
+assert "LOW_MEMORY_SKIP_MIB = 1024" in updates
+qml = pathlib.Path("files/plasmoid/contents/ui/main.qml").read_text(encoding="utf-8")
+for token in ("systemUpdateCheckNative", "systemUpdateCheckFlatpak", "systemUpdateCheckSnap", "systemUpdateIntervalMinutes", "systemUpdateLowMemoryProtection"):
+    assert token in qml, token
+PY
+ok "cross-distro sources, opt-in Flatpak/Snap, independent interval and memory guard are wired"
 
 echo "-- installer sandbox (upgrade path) --"
 DL_SANDBOX="$CHECK_TMP/upgrade-home"
@@ -370,7 +393,7 @@ cmp -s "$BROKEN_HOME/.config/die-lage/config.json" "$CHECK_TMP/broken-before.jso
 ok "corrupt existing config aborts before installed files are changed"
 
 echo "-- required files --"
-for f in files/bin/dielage-cache.py files/bin/dielage-server.py \
+for f in files/bin/dielage-cache.py files/bin/dielage_updates.py files/bin/dielage-server.py \
          files/plasmoid/contents/ui/main.qml files/plasmoid/metadata.json \
          files/plasmoid/contents/images/dielage.svg \
          files/plasmoid/contents/images/dielage-panel.svg \

@@ -49,12 +49,19 @@ distro_family() {
         debian|ubuntu|linuxmint|pop|elementary|kubuntu|kde-neon|neon) echo "debian"; return ;;
         fedora|rhel|centos|rocky|almalinux|nobara) echo "fedora"; return ;;
         opensuse*|sles|tumbleweed) echo "suse"; return ;;
+        alpine) echo "alpine"; return ;;
+        void) echo "void"; return ;;
+        solus) echo "solus"; return ;;
+        gentoo) echo "gentoo"; return ;;
     esac
     case " $DISTRO_LIKE " in
         *" arch "*)   echo "arch"; return ;;
         *" debian "*|*" ubuntu "*) echo "debian"; return ;;
         *" fedora "*|*" rhel "*)   echo "fedora"; return ;;
         *" suse "*|*" opensuse "*) echo "suse"; return ;;
+        *" alpine "*) echo "alpine"; return ;;
+        *" void "*) echo "void"; return ;;
+        *" gentoo "*) echo "gentoo"; return ;;
     esac
     echo "unknown"
 }
@@ -96,6 +103,10 @@ distro_install_hint() {
         debian) echo "sudo apt install $pkgs" ;;
         fedora) echo "sudo dnf install $pkgs" ;;
         suse)   echo "sudo zypper install $pkgs" ;;
+        alpine) echo "sudo apk add $pkgs" ;;
+        void)   echo "sudo xbps-install -S $pkgs" ;;
+        solus)  echo "sudo eopkg install $pkgs" ;;
+        gentoo) echo "sudo emerge --ask $pkgs" ;;
         *)      echo "(manuell installieren: $pkgs)" ;;
     esac
 }
@@ -329,6 +340,7 @@ PY
 # leave a new backend paired with the old widget even though installation had
 # failed. Validation is now the mutation boundary.
 install -m 0755 "$BASE_DIR/files/bin/dielage-cache.py"        "$HOME/.local/bin/dielage-cache.py"
+install -m 0644 "$BASE_DIR/files/bin/dielage_updates.py"      "$HOME/.local/bin/dielage_updates.py"
 install -m 0755 "$BASE_DIR/files/bin/dielage-server.py"       "$HOME/.local/bin/dielage-server.py"
 install -m 0755 "$BASE_DIR/uninstall.sh"                      "$HOME/.local/bin/dielage-uninstall"
 

@@ -162,7 +162,7 @@ PlasmoidItem {
     // The visible widget version. Kept in sync with metadata.json by the
     // installer / packager. This constant is shown in the About section and
     // sent as part of the User-Agent only by the helper (not by QML).
-    readonly property string appVersion: "2.1.8"
+    readonly property string appVersion: "2.1.9"
     readonly property string projectUrl: "https://github.com/gerald-drissner/die-lage-plasmoid"
     // The asset name is intentionally stable. Every public release should upload
     // die-lage-latest.zip in addition to the versioned installer ZIP, so first-run
@@ -201,6 +201,11 @@ PlasmoidItem {
     property bool showSystemVpn: true
     property string systemVpnLabel: ""
     property bool showSystemUpdates: true
+    property bool systemUpdateCheckNative: true
+    property bool systemUpdateCheckFlatpak: false
+    property bool systemUpdateCheckSnap: false
+    property string systemUpdateIntervalMinutes: "60"
+    property bool systemUpdateLowMemoryProtection: true
 
     property string helperStatusMessage: ""
     property bool helperStatusChecking: false
@@ -935,6 +940,17 @@ PlasmoidItem {
             "vpnLabelPlaceholder": "e.g. Mullvad, WARP, WG",
             "vpnLabelHelp": "Optional: if automatic detection cannot name your VPN, enter a short label here. The helper still tries to detect active VPN interfaces first.",
             "showSystemUpdates": "Show available updates",
+            "updateSources": "Update checks",
+            "checkNativeUpdates": "System packages (APT, Pacman, DNF, Zypper, APK, …)",
+            "checkFlatpakUpdates": "Flatpak updates",
+            "checkSnapUpdates": "Snap updates",
+            "updateCheckInterval": "Update-check interval (minutes)",
+            "updateCheckIntervalHelp": "Independent of the normal System interval. Default: 60 minutes; allowed: 10–1440. A manual System/global refresh may check immediately.",
+            "updateHeavyHelp": "Flatpak and Snap are optional and off by default. Package sources are checked sequentially, never in parallel, and no package is installed or metadata refresh forced.",
+            "updateLowMemoryProtection": "Skip package checks when free memory is low",
+            "updateLowMemoryHelp": "When enabled, a due update check is postponed if less than about 1 GiB RAM is currently available. The previous result remains visible.",
+            "updateLowMemoryWarning": "Low-memory system: optional package checks can temporarily use several hundred MiB. Leave Flatpak/Snap off unless you want them enabled.",
+            "updateLowMemorySkipped": "The last due update check was postponed because little RAM was available.",
             "systemHelp": "Compact Linux system data. VPN detection checks local routes, active VPN interfaces and common tools such as NetworkManager, Mullvad, WARP and Tailscale. Public IP/ISP uses an external lookup and is off by default. System data uses its own refresh interval, while news/weather/markets use the main interval.",
             "marketSettings": "Markets – currencies, indices and stocks",
             "marketSubblocks": "Market sections",
@@ -1239,6 +1255,17 @@ PlasmoidItem {
             "vpnLabelPlaceholder": "z. B. Mullvad, WARP, WG",
             "vpnLabelHelp": "Optional: Wenn die automatische Erkennung Ihr VPN nicht benennen kann, tragen Sie hier ein kurzes Kürzel ein. Der Hintergrunddienst prüft trotzdem zuerst aktive VPN-Interfaces und Routen.",
             "showSystemUpdates": "Verfügbare Updates anzeigen",
+            "updateSources": "Update-Prüfung",
+            "checkNativeUpdates": "Systempakete (APT, Pacman, DNF, Zypper, APK, …)",
+            "checkFlatpakUpdates": "Flatpak-Updates",
+            "checkSnapUpdates": "Snap-Updates",
+            "updateCheckInterval": "Intervall der Update-Prüfung (Minuten)",
+            "updateCheckIntervalHelp": "Unabhängig vom normalen System-Intervall. Standard: 60 Minuten; erlaubt: 10–1440. Eine manuelle System-/Gesamtaktualisierung kann sofort prüfen.",
+            "updateHeavyHelp": "Flatpak und Snap sind optional und standardmäßig aus. Paketquellen werden nacheinander geprüft, nie parallel; es werden keine Pakete installiert und keine Metadaten-Aktualisierung erzwungen.",
+            "updateLowMemoryProtection": "Paketprüfung bei wenig freiem RAM auslassen",
+            "updateLowMemoryHelp": "Wenn aktiv, wird eine fällige Update-Prüfung verschoben, sobald aktuell weniger als etwa 1 GiB RAM verfügbar ist. Das bisherige Ergebnis bleibt sichtbar.",
+            "updateLowMemoryWarning": "System mit wenig Arbeitsspeicher: Optionale Paketprüfungen können kurzfristig mehrere hundert MiB benötigen. Flatpak/Snap nur aktivieren, wenn Sie das möchten.",
+            "updateLowMemorySkipped": "Die letzte fällige Update-Prüfung wurde wegen wenig freien Arbeitsspeichers verschoben.",
             "systemHelp": "Kompakte Linux-Systemdaten. Die VPN-Erkennung prüft lokale Routen, aktive VPN-Interfaces und gängige Werkzeuge wie NetworkManager, Mullvad, WARP und Tailscale. Öffentliche IP/ISP nutzt eine externe Abfrage und ist standardmäßig aus. Systemdaten verwenden ein eigenes Aktualisierungsintervall; Nachrichten, Wetter und Märkte nutzen das Hauptintervall.",
             "marketSettings": "Märkte – Währungen, Indizes und Aktien",
             "marketSubblocks": "Marktbereiche",
@@ -2169,6 +2196,27 @@ PlasmoidItem {
         return root.rssData.system.items
     }
 
+    function systemUpdatePolicy() {
+        var p = root.rssData && root.rssData.system ? root.rssData.system.update_policy : null
+        return (p && typeof p === "object") ? p : ({})
+    }
+
+    function systemUpdateMemoryText() {
+        var p = root.systemUpdatePolicy()
+        var mem = p.memory || {}
+        var total = Number(mem.total_mib || 0)
+        var available = Number(mem.available_mib || 0)
+        var suffix = ""
+        if (total > 0) {
+            suffix = " (" + (total / 1024.0).toFixed(total < 10240 ? 1 : 0) + " GiB RAM"
+            if (available > 0) suffix += ", " + (available / 1024.0).toFixed(1) + " GiB " + (root.isEnglish() ? "available" : "frei")
+            suffix += ")"
+        }
+        if (p.skipped_low_memory === true) return root.t("updateLowMemorySkipped") + suffix
+        if (p.low_total_memory === true) return root.t("updateLowMemoryWarning") + suffix
+        return ""
+    }
+
     function hasSystemContent() {
         return Boolean(root.showSystem && root.systemItems().length > 0)
     }
@@ -2379,6 +2427,11 @@ PlasmoidItem {
         root.showSystemVpn = !(data.system && data.system.show_vpn === false)
         root.systemVpnLabel = data.system && data.system.vpn_label ? String(data.system.vpn_label) : ""
         root.showSystemUpdates = !(data.system && data.system.show_updates === false)
+        root.systemUpdateCheckNative = !(data.system && data.system.updates_check_native === false)
+        root.systemUpdateCheckFlatpak = Boolean(data.system && data.system.updates_check_flatpak === true)
+        root.systemUpdateCheckSnap = Boolean(data.system && data.system.updates_check_snap === true)
+        root.systemUpdateIntervalMinutes = String(data.system && data.system.updates_interval_minutes !== undefined ? data.system.updates_interval_minutes : 60)
+        root.systemUpdateLowMemoryProtection = !(data.system && data.system.updates_low_memory_protection === false)
         root.showMarketCurrencies = !(data.markets && data.markets.show_currencies === false)
         root.showMarketIndices = !(data.markets && data.markets.show_indices === false)
         root.showMarketStocks = !(data.markets && data.markets.show_stocks === false)
@@ -2646,7 +2699,12 @@ PlasmoidItem {
                 "show_public_network": root.showSystemPublicNetwork,
                 "show_vpn": root.showSystemVpn,
                 "vpn_label": String(root.systemVpnLabel || "").trim(),
-                "show_updates": root.showSystemUpdates
+                "show_updates": root.showSystemUpdates,
+                "updates_check_native": root.systemUpdateCheckNative,
+                "updates_check_flatpak": root.systemUpdateCheckFlatpak,
+                "updates_check_snap": root.systemUpdateCheckSnap,
+                "updates_interval_minutes": root.clampInt(root.systemUpdateIntervalMinutes, 60, 10, 1440),
+                "updates_low_memory_protection": root.systemUpdateLowMemoryProtection
             },
             "ui": {
                 "font_size": clampedFontSize,
@@ -4867,6 +4925,110 @@ PlasmoidItem {
                                 }
 
                                 ColumnLayout {
+                                    visible: root.showSystem && root.showSystemUpdates
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    PlasmaComponents3.Label {
+                                        text: root.t("updateSources")
+                                        font.bold: true
+                                        font.pixelSize: root.smallSize
+                                    }
+
+                                    QQC2.CheckBox {
+                                        text: root.t("checkNativeUpdates")
+                                        checked: root.systemUpdateCheckNative
+                                        font.pixelSize: root.smallSize
+                                        onToggled: root.systemUpdateCheckNative = checked
+                                    }
+                                    QQC2.CheckBox {
+                                        text: root.t("checkFlatpakUpdates")
+                                        checked: root.systemUpdateCheckFlatpak
+                                        font.pixelSize: root.smallSize
+                                        onToggled: root.systemUpdateCheckFlatpak = checked
+                                    }
+                                    QQC2.CheckBox {
+                                        text: root.t("checkSnapUpdates")
+                                        checked: root.systemUpdateCheckSnap
+                                        font.pixelSize: root.smallSize
+                                        onToggled: root.systemUpdateCheckSnap = checked
+                                    }
+
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("updateHeavyHelp")
+                                        opacity: 0.70
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        spacing: Kirigami.Units.largeSpacing
+                                        ColumnLayout {
+                                            PlasmaComponents3.Label { text: root.t("updateCheckInterval"); font.pixelSize: root.smallSize }
+                                            QQC2.TextField {
+                                                Layout.preferredWidth: 150
+                                                text: root.systemUpdateIntervalMinutes
+                                                placeholderText: "60"
+                                                inputMethodHints: Qt.ImhDigitsOnly
+                                                font.pixelSize: root.smallSize
+                                                onTextChanged: root.systemUpdateIntervalMinutes = text
+                                            }
+                                        }
+                                        PlasmaComponents3.Label {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: root.t("updateCheckIntervalHelp")
+                                            opacity: 0.68
+                                            font.pixelSize: Math.max(9, root.smallSize - 1)
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
+                                    QQC2.CheckBox {
+                                        text: root.t("updateLowMemoryProtection")
+                                        checked: root.systemUpdateLowMemoryProtection
+                                        font.pixelSize: root.smallSize
+                                        onToggled: root.systemUpdateLowMemoryProtection = checked
+                                    }
+                                    PlasmaComponents3.Label {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        text: root.t("updateLowMemoryHelp")
+                                        opacity: 0.68
+                                        font.pixelSize: Math.max(9, root.smallSize - 1)
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                    Rectangle {
+                                        visible: root.systemUpdateMemoryText().length > 0
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        color: Kirigami.Theme.backgroundColor
+                                        border.color: Kirigami.Theme.neutralTextColor
+                                        border.width: 1
+                                        radius: 6
+                                        implicitHeight: updateMemoryWarningLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+                                        PlasmaComponents3.Label {
+                                            id: updateMemoryWarningLabel
+                                            anchors.fill: parent
+                                            anchors.margins: Kirigami.Units.largeSpacing
+                                            text: root.systemUpdateMemoryText()
+                                            color: Kirigami.Theme.neutralTextColor
+                                            font.pixelSize: Math.max(9, root.smallSize - 1)
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
                                     spacing: Kirigami.Units.smallSpacing
@@ -6864,6 +7026,10 @@ PlasmoidItem {
                                             font.bold: true
                                             color: root.systemValueColor(sys)
                                             elide: Text.ElideRight
+                                            QQC2.ToolTip.visible: updateDetailsHover.hovered && Boolean(sys.details)
+                                            QQC2.ToolTip.delay: 500
+                                            QQC2.ToolTip.text: sys.details ? String(sys.details) : ""
+                                            HoverHandler { id: updateDetailsHover }
                                         }
                                     }
                                 }

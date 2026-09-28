@@ -4,6 +4,10 @@ Die Lage is a KDE Plasma 6 dashboard widget for current news, weather, warnings,
 
 The widget uses a small local helper service to fetch and cache data. This avoids doing heavy network work inside QML and keeps the visible applet responsive.
 
+## Update checks
+
+The System block can check the distribution's native package manager and, optionally, Flatpak and Snap. Native checks support common Debian/Ubuntu, Arch, Fedora/RHEL, openSUSE, Alpine, Void, Solus, Gentoo and rpm-ostree systems, with PackageKit as a fallback. Checks are read-only, separately rate-limited and protected against low-memory conditions. Flatpak and Snap are opt-in.
+
 ## Installation
 
 For the complete installation, use the full release ZIP:

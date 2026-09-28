@@ -20,6 +20,8 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-MemoryMax=256M
+# Package/update helpers such as Flatpak run inside this cgroup. 256M was too
+# small in practice and caused a memcg OOM kill even with plenty of system RAM.
+MemoryMax=768M
 TasksMax=64
 ExecStart=%h/.local/bin/dielage-cache.py

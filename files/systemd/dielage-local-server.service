@@ -16,9 +16,10 @@ RestrictSUIDSGID=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 LockPersonality=yes
-# The helper is a small JSON responder; if it ever leaks it should be capped
-# rather than taking the session down with it.
-MemoryMax=256M
+# The server itself is lightweight, but manual refreshes are child processes
+# in this same cgroup. Give them the same tested ceiling as timer-driven cache
+# refreshes; this is a cap, not reserved memory.
+MemoryMax=768M
 TasksMax=64
 
 [Install]
